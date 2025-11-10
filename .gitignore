@@ -1,0 +1,21 @@
+nul
+method9_data/nul
+
+# API Keys and secrets
+.env
+.env.example
+start_with_api.bat
+set_env_vars.bat
+
+# User-specific files (contains sensitive translated PDFs)
+user_files/
+uploads/
+translated_pdfs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Archive folder (old development files)
+archive/
