@@ -238,14 +238,13 @@ with tab1:
 
                 # Step 2: Process each file
                 for idx, uploaded_file in enumerate(uploaded_files):
-                    elapsed = time.time() - start_time
-                    timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
-
                     # Calculate progress for this file (filenames done = 5%, files start at 10%)
                     file_base_progress = 0.1 + (idx / total_files) * 0.9
                     file_progress_range = 0.9 / total_files
 
                     # Save uploaded file
+                    elapsed = time.time() - start_time
+                    timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
                     status_text.text(f"📥 Uploading {uploaded_file.name}...")
                     progress_bar.progress(file_base_progress + file_progress_range * 0.1)
 
@@ -260,8 +259,11 @@ with tab1:
                         status_text.text(f"🤖 Translating {uploaded_file.name}...")
 
                         def update_progress(progress_value):
+                            # Update both progress bar and elapsed time
                             overall_progress = file_base_progress + (file_progress_range * progress_value)
                             progress_bar.progress(overall_progress)
+                            elapsed = time.time() - start_time
+                            timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
 
                         success, input_tokens, output_tokens = process_pdf(
                             str(input_path),

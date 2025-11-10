@@ -42,7 +42,7 @@ def login_page():
         with st.form("login_form"):
             email = st.text_input("Email", placeholder="your.email@example.com")
             password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Sign In", use_container_width=True)
+            submit = st.form_submit_button("Sign In", width="stretch")
 
             if submit:
                 if not email or not password:
@@ -125,5 +125,5 @@ def display_user_info():
         st.sidebar.markdown(f"**Logged in as:**")
         st.sidebar.markdown(f"{user.email}")
 
-        if st.sidebar.button("🚪 Logout", use_container_width=True):
+        if st.sidebar.button("🚪 Logout", width="stretch"):
             logout()
