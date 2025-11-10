@@ -4,6 +4,8 @@ import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Load environment variables from .env file
 load_dotenv()
@@ -19,6 +21,7 @@ from anthropic_translator import translate_with_haiku
 # Configuration constants
 HAIKU_PRICE_INPUT_PER_1M = 0.80
 HAIKU_PRICE_OUTPUT_PER_1M = 4.00
+MAX_PARALLEL_TRANSLATIONS = 5  # Process up to 5 files concurrently
 
 # Helper functions
 def sanitize_filename(filename):
@@ -29,6 +32,53 @@ def sanitize_filename(filename):
     for char in '<>:"/\\|?*':
         filename = filename.replace(char, '_')
     return filename
+
+def process_single_file(idx, uploaded_file, api_key, source_lang, target_lang,
+                       translated_filenames, UPLOAD_DIR, OUTPUT_DIR):
+    """Process a single PDF file (used for parallel execution).
+
+    Returns:
+        tuple: (idx, success, input_tokens, output_tokens, translated_filename, error_msg)
+    """
+    import shutil
+
+    try:
+        # Save uploaded file
+        input_path = UPLOAD_DIR / f"temp_input_{idx}.pdf"
+        with open(input_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        output_path = OUTPUT_DIR / f"temp_output_{idx}.pdf"
+
+        # Translate PDF content
+        success, input_tokens, output_tokens = process_pdf(
+            str(input_path),
+            str(output_path),
+            api_key,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            progress_callback=None  # No per-file progress in parallel mode
+        )
+
+        if success:
+            # Get translated filename from batch (or use original as fallback)
+            file_key = f"file_{idx}"
+            translated_name = translated_filenames.get(
+                file_key,
+                uploaded_file.name.replace('.pdf', '')
+            )
+
+            # Move to final location
+            final_output_name = f"{translated_name}.pdf"
+            final_output_path = OUTPUT_DIR / final_output_name
+            shutil.move(str(output_path), str(final_output_path))
+
+            return (idx, True, input_tokens, output_tokens, final_output_name, None)
+        else:
+            return (idx, False, 0, 0, None, "Translation failed")
+
+    except Exception as e:
+        return (idx, False, 0, 0, None, str(e))
 
 def translate_filenames_batch(filenames, api_key, source_lang, target_lang):
     """Translate multiple filenames in a single API call.
@@ -241,97 +291,78 @@ with tab1:
                     total_input_tokens += filename_result["input_tokens"]
                     total_output_tokens += filename_result["output_tokens"]
 
-                    # Step 2: Process each file
-                    for idx, uploaded_file in enumerate(uploaded_files):
-                        # Calculate progress for this file (filenames done = 5%, files start at 10%)
-                        file_base_progress = 0.1 + (idx / total_files) * 0.9
-                        file_progress_range = 0.9 / total_files
+                    # Step 2: Process files in parallel
+                    status_text.text("🚀 Translating PDFs in parallel...")
+                    progress_bar.progress(0.1)
 
-                        # Save uploaded file
-                        elapsed = time.time() - start_time
-                        timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
-                        status_text.text(f"📥 Uploading {uploaded_file.name}...")
-                        progress_bar.progress(file_base_progress + file_progress_range * 0.1)
+                    # Shared state for progress tracking
+                    completed_lock = threading.Lock()
 
-                        input_path = UPLOAD_DIR / f"temp_input_{idx}.pdf"
-                        with open(input_path, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-
-                        output_path = OUTPUT_DIR / f"temp_output_{idx}.pdf"
-
-                        try:
-                            # Translate PDF content
-                            status_text.text(f"🤖 Translating {uploaded_file.name}...")
-
-                            def update_progress(progress_value):
-                                # Update both progress bar and elapsed time
-                                overall_progress = file_base_progress + (file_progress_range * progress_value)
-                                progress_bar.progress(overall_progress)
-                                elapsed = time.time() - start_time
-                                timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
-
-                            success, input_tokens, output_tokens = process_pdf(
-                                str(input_path),
-                                str(output_path),
+                    # Use ThreadPoolExecutor for parallel processing
+                    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_TRANSLATIONS) as executor:
+                        # Submit all translation tasks
+                        future_to_file = {
+                            executor.submit(
+                                process_single_file,
+                                idx,
+                                uploaded_file,
                                 st.session_state["anthropic_api_key"],
-                                source_lang=source_lang,
-                                target_lang=target_lang,
-                                progress_callback=update_progress
-                            )
+                                source_lang,
+                                target_lang,
+                                translated_filenames,
+                                UPLOAD_DIR,
+                                OUTPUT_DIR
+                            ): (idx, uploaded_file) for idx, uploaded_file in enumerate(uploaded_files)
+                        }
 
-                            if success:
-                                # Get translated filename from batch (or use original as fallback)
-                                file_key = f"file_{idx}"
-                                translated_name = translated_filenames.get(
-                                    file_key,
-                                    uploaded_file.name.replace('.pdf', '')  # Fallback to original
-                                )
+                        # Process completed tasks as they finish
+                        for future in as_completed(future_to_file):
+                            idx, uploaded_file = future_to_file[future]
 
-                                # Move to final location
-                                final_output_name = f"{translated_name}.pdf"
-                                final_output_path = OUTPUT_DIR / final_output_name
-                                shutil.move(str(output_path), str(final_output_path))
+                            try:
+                                file_idx, success, input_tokens, output_tokens, final_output_name, error_msg = future.result()
 
-                                completed += 1
-                                total_input_tokens += input_tokens
-                                total_output_tokens += output_tokens
+                                if success:
+                                    with completed_lock:
+                                        completed += 1
+                                        total_input_tokens += input_tokens
+                                        total_output_tokens += output_tokens
 
-                                # Log to database if Supabase is configured
-                                user_id = get_user_id()
-                                if user_id and st.session_state.get("supabase"):
-                                    file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
-                                    logged = log_translation_to_database(
-                                        st.session_state.supabase,
-                                        user_id,
-                                        {
-                                            "original_filename": uploaded_file.name,
-                                            "translated_filename": final_output_name,
-                                            "input_tokens": input_tokens,
-                                            "output_tokens": output_tokens,
-                                            "file_size_bytes": file_size,
-                                            "status": "completed"
-                                        }
-                                    )
-                                    if not logged:
-                                        st.warning(f"⚠️ {uploaded_file.name}: Translation completed but history wasn't saved")
+                                    # Log to database if Supabase is configured
+                                    user_id = get_user_id()
+                                    if user_id and st.session_state.get("supabase"):
+                                        file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
+                                        logged = log_translation_to_database(
+                                            st.session_state.supabase,
+                                            user_id,
+                                            {
+                                                "original_filename": uploaded_file.name,
+                                                "translated_filename": final_output_name,
+                                                "input_tokens": input_tokens,
+                                                "output_tokens": output_tokens,
+                                                "file_size_bytes": file_size,
+                                                "status": "completed"
+                                            }
+                                        )
+                                        if not logged:
+                                            st.warning(f"⚠️ {uploaded_file.name}: Translation completed but history wasn't saved")
 
-                                # Show tokens for this file
-                                file_tokens = input_tokens + output_tokens
-                                st.success(f"✅ {uploaded_file.name}: {file_tokens:,} tokens ({input_tokens:,} in + {output_tokens:,} out)")
+                                    # Show tokens for this file
+                                    file_tokens = input_tokens + output_tokens
+                                    st.success(f"✅ {uploaded_file.name}: {file_tokens:,} tokens ({input_tokens:,} in + {output_tokens:,} out)")
+                                else:
+                                    st.error(f"❌ {uploaded_file.name}: {error_msg}")
 
-                                # Update progress to 100% for this file
-                                progress_bar.progress((idx + 1) / total_files)
-                            else:
-                                st.warning(f"⚠️ {uploaded_file.name} needs manual translation - check console")
+                            except Exception as e:
+                                st.error(f"❌ Failed to translate {uploaded_file.name}: {e}")
 
-                                # Update progress even if failed
-                                progress_bar.progress((idx + 1) / total_files)
-
-                        except Exception as e:
-                            st.error(f"❌ Failed to translate {uploaded_file.name}: {e}")
-                            # Update progress even on error
-                            progress_bar.progress((idx + 1) / total_files)
-                            continue
+                            # Update progress bar and timer after each file completes
+                            with completed_lock:
+                                current_completed = completed
+                            elapsed = time.time() - start_time
+                            progress_bar.progress(0.1 + (current_completed / total_files) * 0.9)
+                            status_text.text(f"📊 Translating ({current_completed}/{total_files} complete, {MAX_PARALLEL_TRANSLATIONS} parallel)...")
+                            timer_text.text(f"⏱️ Elapsed: {elapsed:.1f}s")
 
                     # Final time
                     total_time = time.time() - start_time
