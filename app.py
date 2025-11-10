@@ -187,187 +187,196 @@ with tab1:
             st.text(f"📄 {uploaded_file.name}")
 
         st.divider()
-        st.header(f"Batch Translate ({source_lang} → {target_lang})")
 
         # Initialize translation state
         if "is_translating" not in st.session_state:
             st.session_state.is_translating = False
+        if "translation_completed" not in st.session_state:
+            st.session_state.translation_completed = False
 
-        # Batch translate button - disabled during translation
-        button_disabled = st.session_state.is_translating or source_lang == target_lang
-        if st.button("🤖 Batch Translate All Files", type="primary", width="stretch", disabled=button_disabled):
-            if source_lang == target_lang:
-                st.error("❌ Cannot translate: Source and target languages are the same!")
-            elif not st.session_state.get("anthropic_api_key"):
-                st.error("❌ API Key not found! Set ANTHROPIC_API_KEY environment variable on Render.")
-            else:
-                # Set translation state to true
-                st.session_state.is_translating = True
-                import shutil
-                import time
+        # Only show batch translate section if translation hasn't been completed
+        if not st.session_state.translation_completed:
+            st.header(f"Batch Translate ({source_lang} → {target_lang})")
 
-                start_time = time.time()
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                timer_text = st.empty()
+            # Batch translate button - disabled during translation
+            button_disabled = st.session_state.is_translating or source_lang == target_lang
+            if st.button("🤖 Batch Translate All Files", type="primary", width="stretch", disabled=button_disabled):
+                if source_lang == target_lang:
+                    st.error("❌ Cannot translate: Source and target languages are the same!")
+                elif not st.session_state.get("anthropic_api_key"):
+                    st.error("❌ API Key not found! Set ANTHROPIC_API_KEY environment variable on Render.")
+                else:
+                    # Set translation state to true
+                    st.session_state.is_translating = True
+                    import shutil
+                    import time
 
-                total_files = len(uploaded_files)
-                completed = 0
-                total_input_tokens = 0
-                total_output_tokens = 0
+                    start_time = time.time()
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    timer_text = st.empty()
 
-                # Step 1: Batch translate ALL filenames in one API call
-                status_text.text("🔤 Translating filenames...")
-                progress_bar.progress(0.05)
+                    total_files = len(uploaded_files)
+                    completed = 0
+                    total_input_tokens = 0
+                    total_output_tokens = 0
 
-                filenames_to_translate = {
-                    f"file_{idx}": uploaded_file.name.replace('.pdf', '')
-                    for idx, uploaded_file in enumerate(uploaded_files)
-                }
+                    # Step 1: Batch translate ALL filenames in one API call
+                    status_text.text("🔤 Translating filenames...")
+                    progress_bar.progress(0.05)
 
-                filename_result = translate_filenames_batch(
-                    filenames_to_translate,
-                    st.session_state["anthropic_api_key"],
-                    source_lang,
-                    target_lang
-                )
+                    filenames_to_translate = {
+                        f"file_{idx}": uploaded_file.name.replace('.pdf', '')
+                        for idx, uploaded_file in enumerate(uploaded_files)
+                    }
 
-                translated_filenames = filename_result["translations"]
-                total_input_tokens += filename_result["input_tokens"]
-                total_output_tokens += filename_result["output_tokens"]
+                    filename_result = translate_filenames_batch(
+                        filenames_to_translate,
+                        st.session_state["anthropic_api_key"],
+                        source_lang,
+                        target_lang
+                    )
 
-                # Step 2: Process each file
-                for idx, uploaded_file in enumerate(uploaded_files):
-                    # Calculate progress for this file (filenames done = 5%, files start at 10%)
-                    file_base_progress = 0.1 + (idx / total_files) * 0.9
-                    file_progress_range = 0.9 / total_files
+                    translated_filenames = filename_result["translations"]
+                    total_input_tokens += filename_result["input_tokens"]
+                    total_output_tokens += filename_result["output_tokens"]
 
-                    # Save uploaded file
-                    elapsed = time.time() - start_time
-                    timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
-                    status_text.text(f"📥 Uploading {uploaded_file.name}...")
-                    progress_bar.progress(file_base_progress + file_progress_range * 0.1)
+                    # Step 2: Process each file
+                    for idx, uploaded_file in enumerate(uploaded_files):
+                        # Calculate progress for this file (filenames done = 5%, files start at 10%)
+                        file_base_progress = 0.1 + (idx / total_files) * 0.9
+                        file_progress_range = 0.9 / total_files
 
-                    input_path = UPLOAD_DIR / f"temp_input_{idx}.pdf"
-                    with open(input_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
+                        # Save uploaded file
+                        elapsed = time.time() - start_time
+                        timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
+                        status_text.text(f"📥 Uploading {uploaded_file.name}...")
+                        progress_bar.progress(file_base_progress + file_progress_range * 0.1)
 
-                    output_path = OUTPUT_DIR / f"temp_output_{idx}.pdf"
+                        input_path = UPLOAD_DIR / f"temp_input_{idx}.pdf"
+                        with open(input_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
 
-                    try:
-                        # Translate PDF content
-                        status_text.text(f"🤖 Translating {uploaded_file.name}...")
+                        output_path = OUTPUT_DIR / f"temp_output_{idx}.pdf"
 
-                        def update_progress(progress_value):
-                            # Update both progress bar and elapsed time
-                            overall_progress = file_base_progress + (file_progress_range * progress_value)
-                            progress_bar.progress(overall_progress)
-                            elapsed = time.time() - start_time
-                            timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
+                        try:
+                            # Translate PDF content
+                            status_text.text(f"🤖 Translating {uploaded_file.name}...")
 
-                        success, input_tokens, output_tokens = process_pdf(
-                            str(input_path),
-                            str(output_path),
-                            st.session_state["anthropic_api_key"],
-                            source_lang=source_lang,
-                            target_lang=target_lang,
-                            progress_callback=update_progress
-                        )
+                            def update_progress(progress_value):
+                                # Update both progress bar and elapsed time
+                                overall_progress = file_base_progress + (file_progress_range * progress_value)
+                                progress_bar.progress(overall_progress)
+                                elapsed = time.time() - start_time
+                                timer_text.text(f"⏱️ Elapsed time: {elapsed:.1f}s")
 
-                        if success:
-                            # Get translated filename from batch (or use original as fallback)
-                            file_key = f"file_{idx}"
-                            translated_name = translated_filenames.get(
-                                file_key,
-                                uploaded_file.name.replace('.pdf', '')  # Fallback to original
+                            success, input_tokens, output_tokens = process_pdf(
+                                str(input_path),
+                                str(output_path),
+                                st.session_state["anthropic_api_key"],
+                                source_lang=source_lang,
+                                target_lang=target_lang,
+                                progress_callback=update_progress
                             )
 
-                            # Move to final location
-                            final_output_name = f"{translated_name}.pdf"
-                            final_output_path = OUTPUT_DIR / final_output_name
-                            shutil.move(str(output_path), str(final_output_path))
-
-                            completed += 1
-                            total_input_tokens += input_tokens
-                            total_output_tokens += output_tokens
-
-                            # Log to database if Supabase is configured
-                            user_id = get_user_id()
-                            if user_id and st.session_state.get("supabase"):
-                                file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
-                                logged = log_translation_to_database(
-                                    st.session_state.supabase,
-                                    user_id,
-                                    {
-                                        "original_filename": uploaded_file.name,
-                                        "translated_filename": final_output_name,
-                                        "input_tokens": input_tokens,
-                                        "output_tokens": output_tokens,
-                                        "file_size_bytes": file_size,
-                                        "status": "completed"
-                                    }
+                            if success:
+                                # Get translated filename from batch (or use original as fallback)
+                                file_key = f"file_{idx}"
+                                translated_name = translated_filenames.get(
+                                    file_key,
+                                    uploaded_file.name.replace('.pdf', '')  # Fallback to original
                                 )
-                                if not logged:
-                                    st.warning(f"⚠️ {uploaded_file.name}: Translation completed but history wasn't saved")
 
-                            # Show tokens for this file
-                            file_tokens = input_tokens + output_tokens
-                            st.success(f"✅ {uploaded_file.name}: {file_tokens:,} tokens ({input_tokens:,} in + {output_tokens:,} out)")
+                                # Move to final location
+                                final_output_name = f"{translated_name}.pdf"
+                                final_output_path = OUTPUT_DIR / final_output_name
+                                shutil.move(str(output_path), str(final_output_path))
 
-                            # Update progress to 100% for this file
+                                completed += 1
+                                total_input_tokens += input_tokens
+                                total_output_tokens += output_tokens
+
+                                # Log to database if Supabase is configured
+                                user_id = get_user_id()
+                                if user_id and st.session_state.get("supabase"):
+                                    file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
+                                    logged = log_translation_to_database(
+                                        st.session_state.supabase,
+                                        user_id,
+                                        {
+                                            "original_filename": uploaded_file.name,
+                                            "translated_filename": final_output_name,
+                                            "input_tokens": input_tokens,
+                                            "output_tokens": output_tokens,
+                                            "file_size_bytes": file_size,
+                                            "status": "completed"
+                                        }
+                                    )
+                                    if not logged:
+                                        st.warning(f"⚠️ {uploaded_file.name}: Translation completed but history wasn't saved")
+
+                                # Show tokens for this file
+                                file_tokens = input_tokens + output_tokens
+                                st.success(f"✅ {uploaded_file.name}: {file_tokens:,} tokens ({input_tokens:,} in + {output_tokens:,} out)")
+
+                                # Update progress to 100% for this file
+                                progress_bar.progress((idx + 1) / total_files)
+                            else:
+                                st.warning(f"⚠️ {uploaded_file.name} needs manual translation - check console")
+
+                                # Update progress even if failed
+                                progress_bar.progress((idx + 1) / total_files)
+
+                        except Exception as e:
+                            st.error(f"❌ Failed to translate {uploaded_file.name}: {e}")
+                            # Update progress even on error
                             progress_bar.progress((idx + 1) / total_files)
-                        else:
-                            st.warning(f"⚠️ {uploaded_file.name} needs manual translation - check console")
+                            continue
 
-                            # Update progress even if failed
-                            progress_bar.progress((idx + 1) / total_files)
+                    # Final time
+                    total_time = time.time() - start_time
+                    minutes = int(total_time // 60)
+                    seconds = total_time % 60
 
-                    except Exception as e:
-                        st.error(f"❌ Failed to translate {uploaded_file.name}: {e}")
-                        # Update progress even on error
-                        progress_bar.progress((idx + 1) / total_files)
-                        continue
+                    if minutes > 0:
+                        time_str = f"{minutes}m {seconds:.1f}s"
+                    else:
+                        time_str = f"{seconds:.1f}s"
 
-                # Final time
-                total_time = time.time() - start_time
-                minutes = int(total_time // 60)
-                seconds = total_time % 60
+                    # Calculate cost
+                    total_tokens = total_input_tokens + total_output_tokens
+                    cost_input = (total_input_tokens / 1_000_000) * HAIKU_PRICE_INPUT_PER_1M
+                    cost_output = (total_output_tokens / 1_000_000) * HAIKU_PRICE_OUTPUT_PER_1M
+                    total_cost = cost_input + cost_output
 
-                if minutes > 0:
-                    time_str = f"{minutes}m {seconds:.1f}s"
-                else:
-                    time_str = f"{seconds:.1f}s"
+                    # Show final summary
+                    status_text.text("")
+                    timer_text.text(f"⏱️ Total time: {time_str}")
+                    progress_bar.empty()
 
-                # Calculate cost
-                total_tokens = total_input_tokens + total_output_tokens
-                cost_input = (total_input_tokens / 1_000_000) * HAIKU_PRICE_INPUT_PER_1M
-                cost_output = (total_output_tokens / 1_000_000) * HAIKU_PRICE_OUTPUT_PER_1M
-                total_cost = cost_input + cost_output
+                    st.success(f"✅ Batch translation complete! Processed {completed}/{total_files} files in {time_str}")
 
-                # Show final summary
-                status_text.text("")
-                timer_text.text(f"⏱️ Total time: {time_str}")
-                progress_bar.empty()
+                    # Show token usage (cost hidden but still logged to database)
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Tokens", f"{total_tokens:,}")
+                    with col2:
+                        st.metric("Input", f"{total_input_tokens:,}")
+                    with col3:
+                        st.metric("Output", f"{total_output_tokens:,}")
 
-                st.success(f"✅ Batch translation complete! Processed {completed}/{total_files} files in {time_str}")
+                    st.info("📁 Check the 'Files' tab to download your translated PDFs")
 
-                # Show token usage (cost hidden but still logged to database)
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Tokens", f"{total_tokens:,}")
-                with col2:
-                    st.metric("Input", f"{total_input_tokens:,}")
-                with col3:
-                    st.metric("Output", f"{total_output_tokens:,}")
+                    # Reset translation state and mark as completed
+                    st.session_state.is_translating = False
+                    st.session_state.translation_completed = True
+        else:
+            # Translation completed - show summary and allow uploading new files
+            st.success("Translation complete! Your files are ready in the 'Files' tab.")
 
-                st.info("📁 Check the 'Files' tab to download your translated PDFs")
-
-                # Reset translation state
-                st.session_state.is_translating = False
-
-                # Show button to start new translation
-                if st.button("✨ Translate More Files", width="stretch"):
-                    st.rerun()
+            if st.button("Upload New Files", type="primary", width="stretch"):
+                st.session_state.translation_completed = False
+                st.rerun()
 
 with tab2:
     st.header("📁 Translated Files")

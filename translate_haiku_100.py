@@ -243,10 +243,10 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
         page = doc[page_num]
         page_elements = [e for e in text_elements if e["page"] == page_num]
 
-        # Cover original text with white rectangles
+        # Cover original text with white rectangles (minimal padding to avoid covering graphics)
         for elem in page_elements:
             bbox = elem["bbox"]
-            rect = fitz.Rect(bbox[0] - 1, bbox[1] - 1, bbox[2] + 1, bbox[3] + 1)
+            rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
             page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1))
 
         # Insert translated text
