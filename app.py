@@ -201,22 +201,37 @@ tab1, tab2, tab3 = st.tabs(["📤 Upload & Translate", "📁 Files", "📊 Histo
 with tab1:
     st.header("Upload PDFs")
 
-    # Language selection
+    # Language selection with native scripts
+    # Map display names to internal language names
+    LANGUAGES = [
+        ("Français (French)", "French"),
+        ("English (English)", "English"),
+        ("Español (Spanish)", "Spanish"),
+        ("Italiano (Italian)", "Italian"),
+        ("Deutsch (German)", "German")
+    ]
+
+    LANGUAGE_MAP = {display: internal for display, internal in LANGUAGES}
+    language_options = [display for display, _ in LANGUAGES]
+
     col_lang1, col_lang2 = st.columns(2)
     with col_lang1:
-        source_lang = st.selectbox(
+        source_display = st.selectbox(
             "Source Language",
-            ["French", "English", "Spanish"],
+            language_options,
             index=0,
             help="Language of the PDF to translate"
         )
+        source_lang = LANGUAGE_MAP[source_display]
+
     with col_lang2:
-        target_lang = st.selectbox(
+        target_display = st.selectbox(
             "Target Language",
-            ["English", "French", "Spanish"],
-            index=0,
+            language_options,
+            index=1,  # Default to English
             help="Language to translate to"
         )
+        target_lang = LANGUAGE_MAP[target_display]
 
     # Validate language selection
     if source_lang == target_lang:
