@@ -3,6 +3,10 @@ import streamlit as st
 import os
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -17,6 +21,15 @@ HAIKU_PRICE_INPUT_PER_1M = 0.80
 HAIKU_PRICE_OUTPUT_PER_1M = 4.00
 
 # Helper functions
+def sanitize_filename(filename):
+    """Sanitize filename for Windows file system compatibility"""
+    if not filename:
+        return filename
+    # Already sanitized by anthropic_translator, but double-check for Windows invalid chars
+    for char in '<>:"/\\|?*':
+        filename = filename.replace(char, '_')
+    return filename
+
 def translate_filenames_batch(filenames, api_key, source_lang, target_lang):
     """Translate multiple filenames in a single API call.
 
@@ -31,8 +44,10 @@ def translate_filenames_batch(filenames, api_key, source_lang, target_lang):
     """
     try:
         result = translate_with_haiku(filenames, api_key, source_lang, target_lang)
+        # Sanitize translated filenames for Windows filesystem
+        sanitized = {k: sanitize_filename(v) for k, v in result["translations"].items()}
         return {
-            "translations": result["translations"],
+            "translations": sanitized,
             "input_tokens": result["input_tokens"],
             "output_tokens": result["output_tokens"]
         }
@@ -109,7 +124,7 @@ with st.sidebar:
     # Display logo
     logo_path = Path("MSDL_Logo_Noir_RGB_HR.png")
     if logo_path.exists():
-        st.image(str(logo_path), use_container_width=True)
+        st.image(str(logo_path), width="stretch")
         # Add custom CSS to remove rounded corners
         st.markdown("""
         <style>
@@ -180,7 +195,7 @@ with tab1:
 
         # Batch translate button - disabled during translation
         button_disabled = st.session_state.is_translating or source_lang == target_lang
-        if st.button("🤖 Batch Translate All Files", type="primary", use_container_width=True, disabled=button_disabled):
+        if st.button("🤖 Batch Translate All Files", type="primary", width="stretch", disabled=button_disabled):
             if source_lang == target_lang:
                 st.error("❌ Cannot translate: Source and target languages are the same!")
             elif not st.session_state.get("anthropic_api_key"):
@@ -349,7 +364,7 @@ with tab1:
                 st.session_state.is_translating = False
 
                 # Show button to start new translation
-                if st.button("✨ Translate More Files", use_container_width=True):
+                if st.button("✨ Translate More Files", width="stretch"):
                     st.rerun()
 
 with tab2:

@@ -124,6 +124,13 @@ def extract_text_from_pdf(pdf_path):
     doc.close()
     return all_text
 
+def safe_print(text):
+    """Safely print text with Unicode characters on Windows console"""
+    try:
+        print(text.encode('ascii', 'replace').decode('ascii'))
+    except:
+        print(text)
+
 def process_pdf(input_path, output_path, api_key, source_lang="French", target_lang="English", progress_callback=None):
     """Process single PDF with 100% Haiku translation
 
@@ -135,10 +142,10 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
         target_lang: Target language
         progress_callback: Optional callback function(progress_value) where progress_value is 0.0-1.0
     """
-    print(f"\n{'='*80}")
-    print(f"100% HAIKU TRANSLATION ({source_lang} → {target_lang})")
-    print(f"Processing: {os.path.basename(input_path)}")
-    print('='*80)
+    safe_print(f"\n{'='*80}")
+    safe_print(f"100% HAIKU TRANSLATION ({source_lang} -> {target_lang})")
+    safe_print(f"Processing: {os.path.basename(input_path)}")
+    safe_print('='*80)
 
     # Extract text
     print("Extracting text...")
@@ -257,6 +264,16 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             if not translated:
                 continue
 
+            # Sanitize text: replace Unicode characters that PDF fonts don't support
+            translated = translated.replace('\u2192', '->')  # → arrow
+            translated = translated.replace('\u2013', '-')  # en dash
+            translated = translated.replace('\u2014', '--')  # em dash
+            translated = translated.replace('\u2018', "'")  # left single quote
+            translated = translated.replace('\u2019', "'")  # right single quote
+            translated = translated.replace('\u201c', '"')  # left double quote
+            translated = translated.replace('\u201d', '"')  # right double quote
+            translated = translated.replace('\u2026', '...')  # ellipsis
+
             # Color conversion
             color_int = elem["color"]
             color = (
@@ -281,7 +298,10 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
         if page_num == 0:
             print(f"   Inserted {success_count}/{len(page_elements)} texts on page 1")
 
-    print(f"\nSaving to: {output_path}")
+    # Sanitize output_path for console printing (Windows encoding issue)
+    safe_output_path = str(output_path).encode('ascii', 'replace').decode('ascii')
+    print(f"\nSaving to: {safe_output_path}")
+    # Save PDF
     doc.save(output_path, garbage=4, deflate=True, clean=True)
     doc.close()
     print("Done!")

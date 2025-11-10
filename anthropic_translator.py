@@ -44,6 +44,8 @@ Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON
 - Preserve formatting (parentheses, dashes, etc.)
 - Material codes stay as-is (DOM, INTL, etc.)
 - DO NOT use emojis or special Unicode characters - text only
+- DO NOT use arrow symbols, en/em dashes, smart quotes, or ellipsis
+- Use ONLY basic ASCII characters: regular hyphens (-), regular quotes ("), regular apostrophes (')
 
 {source_lang} texts to translate:
 {json.dumps(texts, ensure_ascii=False, indent=2)}
@@ -80,9 +82,25 @@ Return ONLY the JSON, no markdown code blocks."""
     # Parse JSON
     try:
         translations = json.loads(response_text)
+
+        # Sanitize all translated text: replace Unicode characters that cause PDF encoding issues
+        sanitized_translations = {}
+        for key, text in translations.items():
+            if isinstance(text, str):
+                # Replace problematic Unicode characters with ASCII equivalents
+                text = text.replace('\u2192', '->')  # → arrow
+                text = text.replace('\u2013', '-')  # en dash
+                text = text.replace('\u2014', '--')  # em dash
+                text = text.replace('\u2018', "'")  # left single quote
+                text = text.replace('\u2019', "'")  # right single quote
+                text = text.replace('\u201c', '"')  # left double quote
+                text = text.replace('\u201d', '"')  # right double quote
+                text = text.replace('\u2026', '...')  # ellipsis
+            sanitized_translations[key] = text
+
         # Return translations with token usage
         return {
-            "translations": translations,
+            "translations": sanitized_translations,
             "input_tokens": message.usage.input_tokens,
             "output_tokens": message.usage.output_tokens
         }
