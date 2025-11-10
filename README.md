@@ -1,98 +1,126 @@
-# PDF Translate - French to English
+# AI PDF Translator
 
-Automatic translation of architectural PDFs from French to English using dictionary lookup and AI-powered sentence translation.
+Web-based PDF translation application powered by Claude Haiku 4.5 API with multi-language support and optional user authentication.
 
 ## Features
 
-- **Hybrid Translation**: Dictionary for short text (fast), AI agents for complete sentences (accurate)
-- **Master Dictionary**: 3,857+ French-to-English entries
-- **Per-PDF Sentence Caching**: Reusable translations for each PDF
-- **Format Preservation**: Maintains fonts, colors, sizes, and strikethrough
-- **Smart Categorization**: Skips units, acronyms, technical codes
-- **No Franglish**: Complete sentence translation prevents mixed French/English
+- **Multi-Language Support**: Translate between French, English, and Spanish
+- **Batch Translation**: Upload and translate multiple PDFs simultaneously
+- **Real-time Progress Tracking**: Visual progress bars with time estimates
+- **User Authentication** (Optional): Supabase integration for user accounts and translation history
+- **Translation History**: Track token usage and past translations (when authenticated)
+- **Smart Text Extraction**: Skips technical codes, units, and preserves formatting
+- **Optimized API Usage**: Batch processing with dynamic token-based batching
 
 ## Architecture
 
-**Method 11: Indexed Sentence Translation**
+**Translation Pipeline:**
 
-1. **Phase 1**: Extract and categorize all text
-   - Short text (1-3 words) → Dictionary lookup
-   - Sentences (4+ words) → Index for AI translation
-   - Skip: numbers, units, technical codes
-
-2. **Phase 2**: Batch translate sentences
-   - Save indexed sentences to `{PDF_CODE}_sentences_indexed.json`
-   - Translate with AI agent
-   - Save to `{PDF_CODE}_sentences.json`
-
-3. **Phase 3**: Apply translations
-   - Cover original text with white rectangles
-   - Insert translated text with preserved formatting
+1. **Text Extraction** - PyMuPDF extracts text with position, font, and color data
+2. **Smart Filtering** - Skips numbers, units, material codes, reference codes
+3. **Batch Translation** - Claude Haiku 4.5 API with dynamic batching (auto-adjusts based on token estimates)
+4. **Format Preservation** - Maintains original PDF layout, fonts, and colors
+5. **History Logging** - Tracks translations in Supabase (optional)
 
 ## Quick Start
 
-### Translate a PDF
+### Local Mode (No Authentication)
 
-```bash
-python method11_indexed_sentences.py "input.pdf" "output.pdf"
+1. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Set API Key**:
+   ```bash
+   # Windows
+   set ANTHROPIC_API_KEY=your-api-key-here
+
+   # Linux/Mac
+   export ANTHROPIC_API_KEY=your-api-key-here
+   ```
+
+3. **Run Application**:
+   ```bash
+   streamlit run app.py
+   ```
+
+4. **Access**: Open http://localhost:8501
+
+### Production Mode (With Supabase)
+
+1. **Setup Supabase**:
+   - Create a Supabase project at https://supabase.com
+   - Run [schema.sql](schema.sql) in SQL Editor
+   - Run [fix_view_permissions.sql](fix_view_permissions.sql)
+   - Copy your project URL and anon key
+
+2. **Configure Environment**:
+   ```bash
+   # Copy example and edit
+   cp .env.example .env
+
+   # Add your credentials to .env
+   SUPABASE_URL=your_project_url
+   SUPABASE_ANON_KEY=your_anon_key
+   ```
+
+3. **Run Application**:
+   ```bash
+   streamlit run app.py
+   ```
+
+## Project Structure
+
+```
+├── app.py                      # Main Streamlit application
+├── auth.py                     # Supabase authentication module
+├── supabase_client.py          # Database operations wrapper
+├── anthropic_translator.py     # Claude API integration
+├── translate_haiku_100.py      # PDF processing engine
+├── schema.sql                  # Database schema
+├── fix_view_permissions.sql    # View permissions fix
+├── requirements.txt            # Python dependencies
+└── .env.example               # Configuration template
 ```
 
-### First run creates indexed sentences file:
-```
-Phase 1: Extracting text...
-Phase 2: Translating 259 sentences...
-Saved to: A-001_sentences_indexed.json
+## Configuration
 
-**ACTION REQUIRED:**
-1. Translate A-001_sentences_indexed.json with AI
-2. Save translations to A-001_sentences.json
-3. Re-run script to complete
-```
+### Environment Variables
 
-### Second run applies translations:
-```bash
-python method11_indexed_sentences.py "input.pdf" "output.pdf"
-```
+- `ANTHROPIC_API_KEY` (Required): Your Anthropic API key
+- `SUPABASE_URL` (Optional): Supabase project URL for auth
+- `SUPABASE_ANON_KEY` (Optional): Supabase anonymous key for auth
 
-## Files
+### Cost Estimation
 
-### Core
-- `method11_indexed_sentences.py` - Main translation script
-- `translations.json` - Master dictionary (3,857 entries)
-- `find_remaining_french.py` - Quality check for remaining French
+Claude Haiku 4.5 Pricing:
+- Input: $0.80 per 1M tokens
+- Output: $4.00 per 1M tokens
 
-### Per-PDF Caches
-- `{PDF_CODE}_sentences_indexed.json` - French sentences for translation
-- `{PDF_CODE}_sentences.json` - English translations
+Typical usage: ~5,000-15,000 tokens per architectural PDF
+
+## Features Detail
+
+### Batch Filename Translation
+- Translates all PDF filenames in a single API call (45% reduction in API calls)
+- Falls back to original filename if translation fails
+
+### Dynamic Token-Based Batching
+- Estimates tokens per text (~1 token per 3 characters)
+- Automatically creates batches within 15,000 token limit
+- Prevents API failures from oversized requests
+
+### Progress Tracking
+- Hierarchical progress: Batch → File → Overall
+- Real-time elapsed time display
+- Token usage metrics after completion
 
 ## Requirements
 
-```bash
-pip install pymupdf
-```
-
-## Workflow for 700 PDFs
-
-1. **Extract sentences from new PDF**:
-   ```bash
-   python method11_indexed_sentences.py "A-082.pdf" "A-082-EN.pdf"
-   ```
-
-2. **Translate indexed sentences** (with AI agent or manually)
-
-3. **Complete translation** (re-run same command)
-
-4. **Verify**:
-   ```bash
-   python find_remaining_french.py
-   ```
-
-## Statistics
-
-- **Master Dictionary**: 3,857 entries
-- **Test PDF (A-001)**: 967 text elements, 259 sentences
-- **Translation Speed**: ~10 seconds per PDF
-- **Quality**: 100% English (excluding technical codes)
+- Python 3.8+
+- Anthropic API key
+- Optional: Supabase project (for auth and history)
 
 ## License
 

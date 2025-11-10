@@ -1,13 +1,8 @@
-nul
-method9_data/nul
-
 # API Keys and secrets
 .env
-.env.example
-start_with_api.bat
 set_env_vars.bat
 
-# User-specific files (contains sensitive translated PDFs)
+# User-specific files (runtime folders with user data)
 user_files/
 uploads/
 translated_pdfs/
@@ -17,5 +12,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Archive folder (old development files)
-archive/
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
