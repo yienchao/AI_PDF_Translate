@@ -27,14 +27,12 @@ def translate_with_haiku(texts: dict, api_key: str, source_lang: str = "French",
         target_lang: Target language (e.g., "English", "French", "Spanish")
 
     Returns:
-        Dict of {index: translated_text}
+        Dict with translations and token usage
     """
     client = Anthropic(api_key=api_key)
 
-    # Prepare prompt
+    # Combined prompt (no caching for maximum speed)
     prompt = f"""You are translating architectural/construction documents from {source_lang} to {target_lang}.
-
-Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON object with the same keys.
 
 **IMPORTANT RULES:**
 - Complete translations only - NO {source_lang} words in output
@@ -47,25 +45,22 @@ Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON
 - DO NOT use arrow symbols, en/em dashes, smart quotes, or ellipsis
 - Use ONLY basic ASCII characters: regular hyphens (-), regular quotes ("), regular apostrophes (')
 
+Return format: JSON object with same keys as input
+Return ONLY the JSON, no markdown code blocks.
+
+Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON object with the same keys.
+
 {source_lang} texts to translate:
-{json.dumps(texts, ensure_ascii=False, indent=2)}
+{json.dumps(texts, ensure_ascii=False, indent=2)}"""
 
-Return format:
-{{
-  "index1": "English translation 1",
-  "index2": "English translation 2",
-  ...
-}}
-
-Return ONLY the JSON, no markdown code blocks."""
-
-    # Call Claude Haiku 4.5
+    # Call Claude Haiku 4.5 (no caching)
     message = client.messages.create(
         model=HAIKU_MODEL,
         max_tokens=HAIKU_MAX_OUTPUT_TOKENS,
+        system=prompt,
         messages=[{
             "role": "user",
-            "content": prompt
+            "content": "Translate the texts provided in the system prompt."
         }]
     )
 
@@ -165,6 +160,7 @@ def translate_batch(texts: dict, api_key: str, batch_size: int = HAIKU_DEFAULT_B
         if progress_callback:
             progress_callback(batch_num, total_batches)
 
+    # Return results
     return {
         "translations": all_translations,
         "input_tokens": total_input_tokens,
