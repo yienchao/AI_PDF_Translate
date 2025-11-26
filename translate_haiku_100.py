@@ -148,9 +148,9 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
     safe_print('='*80)
 
     # Extract text
-    print("Extracting text...")
+    safe_print("Extracting text...")
     text_elements = extract_text_from_pdf(input_path)
-    print(f"   Found {len(text_elements)} text elements")
+    safe_print(f"   Found {len(text_elements)} text elements")
 
     # Process each element - EVERYTHING goes to Haiku (no dictionary!)
     needs_translation = {}  # {index: french_text}
@@ -169,15 +169,15 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             elem["type"] = "needs_haiku"
             needs_translation[str(idx)] = text
 
-    print(f"   Skipped (numbers/units): {skipped}")
-    print(f"   Sending to Haiku: {len(needs_translation)}")
+    safe_print(f"   Skipped (numbers/units): {skipped}")
+    safe_print(f"   Sending to Haiku: {len(needs_translation)}")
 
     # Translate with Haiku
     input_tokens = 0
     output_tokens = 0
 
     if needs_translation:
-        print(f"\nTranslating {len(needs_translation)} items with Haiku 4.5...")
+        safe_print(f"\nTranslating {len(needs_translation)} items with Haiku 4.5...")
         try:
             # Create progress callback that updates the main progress bar
             def batch_progress(current_batch, total_batches):
@@ -200,8 +200,8 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             input_tokens = result["input_tokens"]
             output_tokens = result["output_tokens"]
 
-            print(f"   Got {len(translations)} translations from Haiku")
-            print(f"   Tokens: {input_tokens} input + {output_tokens} output = {input_tokens + output_tokens} total")
+            safe_print(f"   Got {len(translations)} translations from Haiku")
+            safe_print(f"   Tokens: {input_tokens} input + {output_tokens} output = {input_tokens + output_tokens} total")
 
             # Apply Haiku translations
             for idx_str, english in translations.items():
@@ -211,32 +211,34 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
                     text_elements[idx_int]["type"] = "haiku"
 
         except Exception as e:
-            print(f"   Haiku translation failed: {e}")
+            import traceback
+            safe_print(f"   Haiku translation failed: {e}")
+            safe_print(f"   Full error: {traceback.format_exc()}")
             return False, 0, 0
 
     # Count results
     haiku_count = sum(1 for e in text_elements if e.get("type") == "haiku")
     untranslated_count = sum(1 for e in text_elements if "translated" not in e)
 
-    print(f"\n--- TRANSLATION STATS ---")
-    print(f"   Total elements: {len(text_elements)}")
-    print(f"   Translated by Haiku: {haiku_count}")
-    print(f"   Skipped (numbers/units): {skipped}")
-    print(f"   UNTRANSLATED (gaps): {untranslated_count}")
+    safe_print(f"\n--- TRANSLATION STATS ---")
+    safe_print(f"   Total elements: {len(text_elements)}")
+    safe_print(f"   Translated by Haiku: {haiku_count}")
+    safe_print(f"   Skipped (numbers/units): {skipped}")
+    safe_print(f"   UNTRANSLATED (gaps): {untranslated_count}")
 
     # Show untranslated items if any
     if untranslated_count > 0:
-        print(f"\n⚠️ WARNING: {untranslated_count} items were NOT translated!")
-        print("These are the GAPS we're investigating:")
+        safe_print(f"\n⚠️ WARNING: {untranslated_count} items were NOT translated!")
+        safe_print("These are the GAPS we're investigating:")
         for idx, elem in enumerate(text_elements):
             if "translated" not in elem:
-                print(f"   - '{elem['text']}'")
+                safe_print(f"   - '{elem['text']}'")
                 if idx >= 10:
-                    print(f"   ... and {untranslated_count - 10} more")
+                    safe_print(f"   ... and {untranslated_count - 10} more")
                     break
 
     # Apply to PDF
-    print("\nApplying translations to PDF...")
+    safe_print("\nApplying translations to PDF...")
     doc = fitz.open(input_path)
 
     for page_num in range(len(doc)):
@@ -283,10 +285,29 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             )
 
             try:
+                # Calculate available width
+                available_width = bbox[2] - bbox[0]
+                available_height = bbox[3] - bbox[1]
+
+                # Try to fit text with automatic font size reduction if needed
+                current_size = size
+                min_size = size * 0.5  # Don't go below 50% of original size
+
+                while current_size >= min_size:
+                    # Estimate text width (approximate: 0.5 * fontsize per character)
+                    estimated_width = len(translated) * current_size * 0.5
+
+                    if estimated_width <= available_width:
+                        break
+
+                    # Reduce font size by 10%
+                    current_size *= 0.9
+
+                # Insert text with adjusted font size
                 page.insert_text(
                     (bbox[0], bbox[3] - 1),
                     translated,
-                    fontsize=size,
+                    fontsize=current_size,
                     color=color,
                     render_mode=0
                 )
@@ -296,15 +317,15 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
                 pass
 
         if page_num == 0:
-            print(f"   Inserted {success_count}/{len(page_elements)} texts on page 1")
+            safe_print(f"   Inserted {success_count}/{len(page_elements)} texts on page 1")
 
     # Sanitize output_path for console printing (Windows encoding issue)
     safe_output_path = str(output_path).encode('ascii', 'replace').decode('ascii')
-    print(f"\nSaving to: {safe_output_path}")
+    safe_print(f"\nSaving to: {safe_output_path}")
     # Save PDF
     doc.save(output_path, garbage=4, deflate=True, clean=True)
     doc.close()
-    print("Done!")
+    safe_print("Done!")
     return True, input_tokens, output_tokens
 
 def main():

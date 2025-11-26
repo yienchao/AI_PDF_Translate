@@ -17,11 +17,12 @@ from translate_haiku_100 import process_pdf
 from auth import require_auth, display_user_info, get_user_id
 from supabase_client import get_supabase_client
 from anthropic_translator import translate_with_haiku
+from api_key_manager import get_key_manager
 
 # Configuration constants
 HAIKU_PRICE_INPUT_PER_1M = 0.80
 HAIKU_PRICE_OUTPUT_PER_1M = 4.00
-MAX_PARALLEL_TRANSLATIONS = 5  # Process up to 5 files concurrently
+MAX_PARALLEL_TRANSLATIONS = 5  # Process up to 5 files concurrently with 5-key rotation (proven stable)
 
 # Helper functions
 def sanitize_filename(filename):
@@ -33,14 +34,26 @@ def sanitize_filename(filename):
         filename = filename.replace(char, '_')
     return filename
 
-def process_single_file(idx, uploaded_file, api_key, source_lang, target_lang,
+def safe_print(text):
+    """Safely print text with Unicode characters on Windows console"""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        # Fallback: replace problematic characters for Windows console
+        print(text.encode('ascii', 'replace').decode('ascii'))
+
+def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lang,
                        translated_filenames, UPLOAD_DIR, OUTPUT_DIR):
     """Process a single PDF file (used for parallel execution).
 
     Returns:
-        tuple: (idx, success, input_tokens, output_tokens, translated_filename, error_msg)
+        tuple: (idx, success, input_tokens, output_tokens, translated_filename, error_msg, api_key_used)
     """
     import shutil
+
+    # Get API key from rotation manager
+    api_key = key_manager.get_next_key()
+    api_key_id = f"key_{list(key_manager.key_usage.keys()).index(api_key) + 1}"
 
     try:
         # Save uploaded file
@@ -60,7 +73,10 @@ def process_single_file(idx, uploaded_file, api_key, source_lang, target_lang,
             progress_callback=None  # No per-file progress in parallel mode
         )
 
+        # Record token usage
         if success:
+            key_manager.record_tokens(api_key, input_tokens + output_tokens)
+
             # Get translated filename from batch (or use original as fallback)
             file_key = f"file_{idx}"
             translated_name = translated_filenames.get(
@@ -73,12 +89,27 @@ def process_single_file(idx, uploaded_file, api_key, source_lang, target_lang,
             final_output_path = OUTPUT_DIR / final_output_name
             shutil.move(str(output_path), str(final_output_path))
 
-            return (idx, True, input_tokens, output_tokens, final_output_name, None)
+            return (idx, True, input_tokens, output_tokens, final_output_name, None, api_key_id)
         else:
-            return (idx, False, 0, 0, None, "Translation failed")
+            key_manager.mark_error(api_key)
+            # Log detailed error
+            import sys
+            safe_print(f"[ERROR] Translation failed for {uploaded_file.name} with api_key_id={api_key_id}")
+            return (idx, False, 0, 0, None, "Translation failed - check console for details", api_key_id)
 
     except Exception as e:
-        return (idx, False, 0, 0, None, str(e))
+        # Check if it's a rate limit error
+        error_str = str(e).lower()
+        if "rate" in error_str or "429" in error_str:
+            key_manager.mark_rate_limited(api_key, duration_seconds=60)
+            error_msg = f"Rate limit: {str(e)}"
+        elif "authentication" in error_str or "401" in error_str or "invalid" in error_str:
+            key_manager.mark_error(api_key)
+            error_msg = f"Auth error: {str(e)}"
+        else:
+            key_manager.mark_error(api_key)
+            error_msg = str(e)
+        return (idx, False, 0, 0, None, error_msg, api_key_id)
 
 def translate_filenames_batch(filenames, api_key, source_lang, target_lang):
     """Translate multiple filenames in a single API call.
@@ -102,7 +133,7 @@ def translate_filenames_batch(filenames, api_key, source_lang, target_lang):
             "output_tokens": result["output_tokens"]
         }
     except Exception as e:
-        print(f"Batch filename translation failed: {e}")
+        safe_print(f"Batch filename translation failed: {e}")
         return {"translations": {}, "input_tokens": 0, "output_tokens": 0}
 
 def log_translation_to_database(supabase, user_id, file_info):
@@ -128,7 +159,7 @@ def log_translation_to_database(supabase, user_id, file_info):
         )
         return True
     except Exception as e:
-        print(f"Database logging failed: {e}")
+        safe_print(f"Database logging failed: {e}")
         return False
 
 # Configure page
@@ -276,6 +307,16 @@ with tab1:
                     import shutil
                     import time
 
+                    # Initialize API key manager
+                    try:
+                        key_manager = get_key_manager()
+                        total_keys = key_manager.get_total_keys()
+                        st.info(f"🔑 Using API key rotation with {total_keys} key(s)")
+                    except ValueError as e:
+                        st.error(f"❌ {e}")
+                        st.session_state.is_translating = False
+                        st.stop()
+
                     start_time = time.time()
                     progress_bar = st.progress(0)
                     status_text = st.empty()
@@ -295,9 +336,11 @@ with tab1:
                         for idx, uploaded_file in enumerate(uploaded_files)
                     }
 
+                    # Use first key for filename translation
+                    filename_api_key = key_manager.get_next_key()
                     filename_result = translate_filenames_batch(
                         filenames_to_translate,
-                        st.session_state["anthropic_api_key"],
+                        filename_api_key,
                         source_lang,
                         target_lang
                     )
@@ -305,9 +348,10 @@ with tab1:
                     translated_filenames = filename_result["translations"]
                     total_input_tokens += filename_result["input_tokens"]
                     total_output_tokens += filename_result["output_tokens"]
+                    key_manager.record_tokens(filename_api_key, filename_result["input_tokens"] + filename_result["output_tokens"])
 
                     # Step 2: Process files in parallel
-                    status_text.text("🚀 Translating PDFs in parallel...")
+                    status_text.text(f"🚀 Translating PDFs in parallel (up to {MAX_PARALLEL_TRANSLATIONS} at once)...")
                     progress_bar.progress(0.1)
 
                     # Shared state for progress tracking
@@ -321,7 +365,7 @@ with tab1:
                                 process_single_file,
                                 idx,
                                 uploaded_file,
-                                st.session_state["anthropic_api_key"],
+                                key_manager,  # Pass key manager instead of single key
                                 source_lang,
                                 target_lang,
                                 translated_filenames,
@@ -335,7 +379,7 @@ with tab1:
                             idx, uploaded_file = future_to_file[future]
 
                             try:
-                                file_idx, success, input_tokens, output_tokens, final_output_name, error_msg = future.result()
+                                file_idx, success, input_tokens, output_tokens, final_output_name, error_msg, api_key_id = future.result()
 
                                 if success:
                                     with completed_lock:
@@ -362,11 +406,11 @@ with tab1:
                                         if not logged:
                                             st.warning(f"⚠️ {uploaded_file.name}: Translation completed but history wasn't saved")
 
-                                    # Show tokens for this file
+                                    # Show tokens for this file with API key used
                                     file_tokens = input_tokens + output_tokens
-                                    st.success(f"✅ {uploaded_file.name}: {file_tokens:,} tokens ({input_tokens:,} in + {output_tokens:,} out)")
+                                    st.success(f"✅ {uploaded_file.name}: {file_tokens:,} tokens ({input_tokens:,} in + {output_tokens:,} out) [{api_key_id}]")
                                 else:
-                                    st.error(f"❌ {uploaded_file.name}: {error_msg}")
+                                    st.error(f"❌ {uploaded_file.name}: {error_msg} [{api_key_id}]")
 
                             except Exception as e:
                                 st.error(f"❌ Failed to translate {uploaded_file.name}: {e}")
@@ -410,6 +454,23 @@ with tab1:
                         st.metric("Input", f"{total_input_tokens:,}")
                     with col3:
                         st.metric("Output", f"{total_output_tokens:,}")
+
+                    # Show API key rotation stats if multiple keys
+                    if total_keys > 1:
+                        st.divider()
+                        st.subheader("🔑 API Key Usage")
+                        key_stats = key_manager.get_stats()
+                        cols = st.columns(min(total_keys, 4))  # Max 4 columns
+                        for i, (key_id, stats) in enumerate(key_stats.items()):
+                            with cols[i % len(cols)]:
+                                st.metric(
+                                    key_id,
+                                    f"{stats['requests']} reqs",
+                                    delta=f"{stats['tokens']:,} tokens",
+                                    delta_color="off"
+                                )
+                                if stats['errors'] > 0:
+                                    st.caption(f"⚠️ {stats['errors']} errors")
 
                     st.info("📁 Check the 'Files' tab to download your translated PDFs")
 
