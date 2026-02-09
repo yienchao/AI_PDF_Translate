@@ -1,171 +1,58 @@
-"""Authentication Module for Streamlit PDF Translation App"""
+"""Simple Password Authentication for PDF Translation App"""
 import streamlit as st
-from supabase_client import get_supabase_client
-from typing import Optional
 import os
 
-# Project UUID for pdfTranslate - users must have this in user_projects to access
-PDF_TRANSLATE_PROJECT_ID = os.environ.get(
-    "PROJECT_ID",
-    "d0df3bef-0296-4ba0-8414-2905fba6507c"
-)
-
-def check_user_project_access(supabase, user_id: str) -> bool:
-    """Check if user has access to this project in user_projects table."""
-    try:
-        response = (
-            supabase.client.table("user_projects")
-            .select("id")
-            .eq("user_id", user_id)
-            .eq("projectID", PDF_TRANSLATE_PROJECT_ID)
-            .execute()
-        )
-        return len(response.data) > 0
-    except Exception as e:
-        print(f"Error checking project access: {e}")
-        return False
-
-def init_auth_state():
-    """Initialize authentication state in session"""
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if "user" not in st.session_state:
-        st.session_state.user = None
-    if "supabase" not in st.session_state:
-        try:
-            st.session_state.supabase = get_supabase_client()
-        except ValueError as e:
-            # If Supabase not configured, set to None (local testing mode)
-            st.session_state.supabase = None
-    if "auth_enabled" not in st.session_state:
-        # Auth is enabled only if Supabase is configured
-        st.session_state.auth_enabled = st.session_state.supabase is not None
-
-    # Try to restore session from Supabase if auth is enabled
-    if st.session_state.auth_enabled and not st.session_state.authenticated:
-        try:
-            user_response = st.session_state.supabase.client.auth.get_user()
-            if user_response and user_response.user:
-                # Verify user still has project access
-                has_access = check_user_project_access(
-                    st.session_state.supabase,
-                    user_response.user.id
-                )
-                if has_access:
-                    st.session_state.authenticated = True
-                    st.session_state.user = user_response.user
-                else:
-                    # User no longer has access, sign them out
-                    st.session_state.supabase.sign_out()
-        except Exception:
-            # No valid session found, user needs to login
-            pass
-
-def login_page():
-    """Display login page"""
-    # Center the login form with columns (wider middle column)
-    col1, col2, col3 = st.columns([1, 2, 1])
-
-    with col2:
-        st.title("PDF Translator - Login")
-        st.markdown("Please sign in to access the PDF translation service")
-
-        with st.form("login_form"):
-            email = st.text_input("Email", placeholder="your.email@example.com")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Sign In", width="stretch")
-
-            if submit:
-                if not email or not password:
-                    st.error("Please enter both email and password")
-                else:
-                    try:
-                        # Sign in with Supabase
-                        response = st.session_state.supabase.sign_in(email, password)
-
-                        if response and response.user:
-                            # Check if user has access to this project
-                            has_access = check_user_project_access(
-                                st.session_state.supabase,
-                                response.user.id
-                            )
-
-                            if has_access:
-                                st.session_state.authenticated = True
-                                st.session_state.user = response.user
-                                st.success("Login successful!")
-                                st.rerun()
-                            else:
-                                # Sign out since they don't have access
-                                st.session_state.supabase.sign_out()
-                                st.error("Access denied. You don't have permission to use this app.")
-                        else:
-                            st.error("Invalid email or password")
-                    except Exception as e:
-                        st.error(f"Login failed: {str(e)}")
-
-def logout():
-    """Log out current user"""
-    try:
-        st.session_state.supabase.sign_out()
-    except Exception:
-        pass
-
-    st.session_state.authenticated = False
-    st.session_state.user = None
-    st.rerun()
+# Get password from environment variable
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
 def require_auth():
     """
-    Require authentication to access the page.
-    Call this at the start of your main app.
-
-    Returns:
-        True if authenticated or auth disabled (local mode), otherwise shows login page and stops execution
+    Simple password protection.
+    Set APP_PASSWORD environment variable to enable.
+    If not set, app runs without authentication.
     """
-    init_auth_state()
-
-    # If auth is not enabled (no Supabase config), allow access for local testing
-    if not st.session_state.auth_enabled:
+    # If no password is configured, allow access (local dev mode)
+    if not APP_PASSWORD:
         return True
 
-    # Auth is enabled, require login
-    if not st.session_state.authenticated:
-        login_page()
+    # Initialize session state
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    # If already authenticated, allow access
+    if st.session_state.authenticated:
+        return True
+
+    # Show password form
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.title("PDF Translator")
+        st.markdown("Enter password to access the app")
+
+        password = st.text_input("Password", type="password", key="password_input")
+
+        if st.button("Enter", type="primary", use_container_width=True):
+            if password == APP_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect password")
+
         st.stop()
 
-    return True
-
-def get_current_user() -> Optional[dict]:
-    """
-    Get current authenticated user
-
-    Returns:
-        User dict or None if not authenticated
-    """
-    if st.session_state.get("authenticated") and st.session_state.get("user"):
-        return st.session_state.user
-    return None
-
-def get_user_id() -> Optional[str]:
-    """
-    Get current user ID
-
-    Returns:
-        User ID string or None if not authenticated
-    """
-    user = get_current_user()
-    if user:
-        return user.id
-    return None
-
 def display_user_info():
-    """Display current user info in sidebar"""
-    user = get_current_user()
-    if user:
+    """Display logout button in sidebar if authenticated"""
+    if APP_PASSWORD and st.session_state.get("authenticated"):
         st.sidebar.markdown("---")
-        st.sidebar.markdown(f"**Logged in as:**")
-        st.sidebar.markdown(f"{user.email}")
+        if st.sidebar.button("Logout", use_container_width=True):
+            st.session_state.authenticated = False
+            st.rerun()
 
-        if st.sidebar.button("🚪 Logout", width="stretch"):
-            logout()
+def get_user_id():
+    """Return None - no user tracking with simple password auth"""
+    return None
+
+def get_current_user():
+    """Return None - no user tracking with simple password auth"""
+    return None
