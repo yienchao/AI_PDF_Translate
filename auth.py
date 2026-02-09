@@ -2,6 +2,28 @@
 import streamlit as st
 from supabase_client import get_supabase_client
 from typing import Optional
+import os
+
+# Project UUID for pdfTranslate - users must have this in user_projects to access
+PDF_TRANSLATE_PROJECT_ID = os.environ.get(
+    "PROJECT_ID",
+    "d0df3bef-0296-4ba0-8414-2905fba6507c"
+)
+
+def check_user_project_access(supabase, user_id: str) -> bool:
+    """Check if user has access to this project in user_projects table."""
+    try:
+        response = (
+            supabase.client.table("user_projects")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("projectID", PDF_TRANSLATE_PROJECT_ID)
+            .execute()
+        )
+        return len(response.data) > 0
+    except Exception as e:
+        print(f"Error checking project access: {e}")
+        return False
 
 def init_auth_state():
     """Initialize authentication state in session"""
@@ -24,8 +46,17 @@ def init_auth_state():
         try:
             user_response = st.session_state.supabase.client.auth.get_user()
             if user_response and user_response.user:
-                st.session_state.authenticated = True
-                st.session_state.user = user_response.user
+                # Verify user still has project access
+                has_access = check_user_project_access(
+                    st.session_state.supabase,
+                    user_response.user.id
+                )
+                if has_access:
+                    st.session_state.authenticated = True
+                    st.session_state.user = user_response.user
+                else:
+                    # User no longer has access, sign them out
+                    st.session_state.supabase.sign_out()
         except Exception:
             # No valid session found, user needs to login
             pass
@@ -53,10 +84,21 @@ def login_page():
                         response = st.session_state.supabase.sign_in(email, password)
 
                         if response and response.user:
-                            st.session_state.authenticated = True
-                            st.session_state.user = response.user
-                            st.success("Login successful!")
-                            st.rerun()
+                            # Check if user has access to this project
+                            has_access = check_user_project_access(
+                                st.session_state.supabase,
+                                response.user.id
+                            )
+
+                            if has_access:
+                                st.session_state.authenticated = True
+                                st.session_state.user = response.user
+                                st.success("Login successful!")
+                                st.rerun()
+                            else:
+                                # Sign out since they don't have access
+                                st.session_state.supabase.sign_out()
+                                st.error("Access denied. You don't have permission to use this app.")
                         else:
                             st.error("Invalid email or password")
                     except Exception as e:
