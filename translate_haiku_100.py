@@ -6,6 +6,7 @@
 - Purpose: Identify source of translation gaps
 """
 import fitz
+import gc
 import os
 import re
 import sys
@@ -237,6 +238,11 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
                     safe_print(f"   ... and {untranslated_count - 10} more")
                     break
 
+    # MEMORY OPTIMIZATION: Clear the translation dict as we've applied results to text_elements
+    needs_translation.clear()
+    del needs_translation
+    gc.collect()
+
     # Apply to PDF
     safe_print("\nApplying translations to PDF...")
     doc = fitz.open(input_path)
@@ -319,12 +325,21 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
         if page_num == 0:
             safe_print(f"   Inserted {success_count}/{len(page_elements)} texts on page 1")
 
+        # MEMORY OPTIMIZATION: Clear page elements after processing each page
+        page_elements.clear()
+
     # Sanitize output_path for console printing (Windows encoding issue)
     safe_output_path = str(output_path).encode('ascii', 'replace').decode('ascii')
     safe_print(f"\nSaving to: {safe_output_path}")
     # Save PDF
     doc.save(output_path, garbage=4, deflate=True, clean=True)
     doc.close()
+
+    # MEMORY OPTIMIZATION: Clear text_elements and force garbage collection
+    text_elements.clear()
+    del text_elements
+    gc.collect()
+
     safe_print("Done!")
     return True, input_tokens, output_tokens
 

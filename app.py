@@ -22,9 +22,30 @@ from api_key_manager import get_key_manager
 # Configuration constants
 HAIKU_PRICE_INPUT_PER_1M = 0.80
 HAIKU_PRICE_OUTPUT_PER_1M = 4.00
-MAX_PARALLEL_TRANSLATIONS = 5  # Process up to 5 files concurrently with 5-key rotation (proven stable)
+MAX_PARALLEL_TRANSLATIONS = 2  # Reduced from 5 to conserve memory on Render (each PDF uses 50-200MB)
+MAX_FILE_SIZE_MB = 50  # Maximum file size per PDF to prevent memory exhaustion
+MAX_TOTAL_UPLOAD_MB = 100  # Maximum total upload size per batch
+MAX_OUTPUT_FILES = 20  # Maximum number of output files to keep per user (cleanup oldest)
 
 # Helper functions
+def cleanup_old_output_files(output_dir, max_files=MAX_OUTPUT_FILES):
+    """Remove oldest output files if count exceeds max_files to prevent disk/memory bloat."""
+    try:
+        pdf_files = list(output_dir.glob("*.pdf"))
+        if len(pdf_files) > max_files:
+            # Sort by modification time, oldest first
+            pdf_files.sort(key=lambda x: x.stat().st_mtime)
+            # Delete oldest files to get under limit
+            files_to_delete = pdf_files[:len(pdf_files) - max_files]
+            for f in files_to_delete:
+                try:
+                    f.unlink()
+                    safe_print(f"[CLEANUP] Deleted old file: {f.name}")
+                except Exception:
+                    pass
+    except Exception as e:
+        safe_print(f"[CLEANUP] Error during cleanup: {e}")
+
 def sanitize_filename(filename):
     """Sanitize filename for Windows file system compatibility"""
     if not filename:
@@ -50,10 +71,14 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
         tuple: (idx, success, input_tokens, output_tokens, translated_filename, error_msg, api_key_used)
     """
     import shutil
+    import gc
 
     # Get API key from rotation manager
     api_key = key_manager.get_next_key()
     api_key_id = f"key_{list(key_manager.key_usage.keys()).index(api_key) + 1}"
+
+    input_path = None
+    output_path = None
 
     try:
         # Save uploaded file
@@ -88,6 +113,7 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
             final_output_name = f"{translated_name}.pdf"
             final_output_path = OUTPUT_DIR / final_output_name
             shutil.move(str(output_path), str(final_output_path))
+            output_path = None  # Already moved, don't delete
 
             return (idx, True, input_tokens, output_tokens, final_output_name, None, api_key_id)
         else:
@@ -110,6 +136,21 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
             key_manager.mark_error(api_key)
             error_msg = str(e)
         return (idx, False, 0, 0, None, error_msg, api_key_id)
+
+    finally:
+        # MEMORY OPTIMIZATION: Clean up temp files and force garbage collection
+        try:
+            if input_path and input_path.exists():
+                input_path.unlink()
+        except Exception:
+            pass
+        try:
+            if output_path and output_path.exists():
+                output_path.unlink()
+        except Exception:
+            pass
+        # Force garbage collection to free PyMuPDF memory
+        gc.collect()
 
 def translate_filenames_batch(filenames, api_key, source_lang, target_lang):
     """Translate multiple filenames in a single API call.
@@ -181,12 +222,16 @@ if user_id:
     OUTPUT_DIR = USER_DIR / "translated"
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # MEMORY OPTIMIZATION: Clean up old output files to prevent disk bloat
+    cleanup_old_output_files(OUTPUT_DIR)
 else:
     # Local testing mode - use shared folder
     UPLOAD_DIR = Path("uploads")
     OUTPUT_DIR = Path("translated_pdfs")
     UPLOAD_DIR.mkdir(exist_ok=True)
     OUTPUT_DIR.mkdir(exist_ok=True)
+    # MEMORY OPTIMIZATION: Clean up old output files to prevent disk bloat
+    cleanup_old_output_files(OUTPUT_DIR)
 
 # Title
 st.title("AI PDF Translator")
@@ -276,11 +321,38 @@ with tab1:
     )
 
     if uploaded_files:
-        st.success(f"✅ Uploaded {len(uploaded_files)} file(s)")
+        # Validate file sizes to prevent memory exhaustion
+        oversized_files = []
+        total_size_mb = 0
+        valid_files = []
+
+        for uploaded_file in uploaded_files:
+            file_size_mb = uploaded_file.size / (1024 * 1024)
+            total_size_mb += file_size_mb
+            if file_size_mb > MAX_FILE_SIZE_MB:
+                oversized_files.append((uploaded_file.name, file_size_mb))
+            else:
+                valid_files.append(uploaded_file)
+
+        if oversized_files:
+            st.error(f"Files exceeding {MAX_FILE_SIZE_MB}MB limit:")
+            for name, size in oversized_files:
+                st.text(f"  - {name}: {size:.1f}MB")
+            st.warning("Please remove oversized files and re-upload.")
+
+        if total_size_mb > MAX_TOTAL_UPLOAD_MB:
+            st.error(f"Total upload size ({total_size_mb:.1f}MB) exceeds {MAX_TOTAL_UPLOAD_MB}MB limit. Please upload fewer files.")
+            uploaded_files = []  # Block processing
+        elif oversized_files:
+            uploaded_files = valid_files  # Only process valid files
+
+        if uploaded_files:
+            st.success(f"Uploaded {len(uploaded_files)} file(s) ({total_size_mb:.1f}MB total)")
 
         # Show uploaded files
         for uploaded_file in uploaded_files:
-            st.text(f"📄 {uploaded_file.name}")
+            file_size_mb = uploaded_file.size / (1024 * 1024)
+            st.text(f"  {uploaded_file.name} ({file_size_mb:.1f}MB)")
 
         st.divider()
 
