@@ -87,13 +87,13 @@ class SupabaseHelper:
         Returns:
             Dict with the created translation record
         """
+        # Only insert columns that exist in the translations table
         data = {
             "original_filename": original_filename,
             "translated_filename": translated_filename,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens,
-            "status": status,
         }
 
         if user_id is not None:
@@ -102,11 +102,11 @@ class SupabaseHelper:
         if file_size_bytes is not None:
             data["file_size_bytes"] = file_size_bytes
 
-        if status == "completed":
-            data["completed_at"] = datetime.utcnow().isoformat()
-
-        if error_message:
-            data["error_message"] = error_message
+        # Calculate costs
+        cost_input = (input_tokens / 1_000_000) * 0.80
+        cost_output = (output_tokens / 1_000_000) * 4.00
+        data["cost_input_usd"] = round(cost_input, 6)
+        data["cost_output_usd"] = round(cost_output, 6)
 
         response = self.client.table("translations").insert(data).execute()
         return response.data[0] if response.data else {}
