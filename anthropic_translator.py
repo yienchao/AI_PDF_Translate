@@ -29,7 +29,7 @@ def translate_with_haiku(texts: dict, api_key: str, source_lang: str = "French",
     Returns:
         Dict with translations and token usage
     """
-    client = Anthropic(api_key=api_key)
+    client = Anthropic(api_key=api_key, timeout=120.0)  # 2 minute timeout to prevent hanging
 
     # Combined prompt (no caching for maximum speed)
     prompt = f"""You are translating architectural/construction documents from {source_lang} to {target_lang}.
