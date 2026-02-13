@@ -22,7 +22,7 @@ from api_key_manager import get_key_manager
 # Configuration constants
 HAIKU_PRICE_INPUT_PER_1M = 0.80
 HAIKU_PRICE_OUTPUT_PER_1M = 4.00
-MAX_PARALLEL_TRANSLATIONS = 2  # Reduced for multi-user stability
+MAX_PARALLEL_TRANSLATIONS = 5  # Standard instance (2GB RAM)
 MAX_FILE_SIZE_MB = 50  # Maximum file size per PDF to prevent memory exhaustion
 MAX_TOTAL_UPLOAD_MB = 100  # Maximum total upload size per batch
 MAX_OUTPUT_FILES = 20  # Maximum number of output files to keep per user (cleanup oldest)

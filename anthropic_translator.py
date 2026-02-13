@@ -116,9 +116,13 @@ Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON
         raise ValueError(f"Failed to parse API response as JSON: {e}\n\nResponse:\n{response_text}")
 
 
+PARALLEL_API_BATCHES = 3  # Number of concurrent API calls per file
+
+
 def translate_batch(texts: dict, api_key: str, batch_size: int = HAIKU_DEFAULT_BATCH_SIZE, source_lang: str = "French", target_lang: str = "English", progress_callback=None, max_tokens_per_batch: int = HAIKU_MAX_TOKENS_PER_BATCH) -> dict:
     """
-    Translate texts in batches to avoid token limits
+    Translate texts in batches to avoid token limits.
+    Batches are processed in parallel for speed.
 
     Args:
         texts: Dict of {index: text_to_translate}
@@ -132,6 +136,9 @@ def translate_batch(texts: dict, api_key: str, batch_size: int = HAIKU_DEFAULT_B
     Returns:
         Dict with "translations" and token usage stats
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+
     all_translations = {}
     total_input_tokens = 0
     total_output_tokens = 0
@@ -162,16 +169,41 @@ def translate_batch(texts: dict, api_key: str, batch_size: int = HAIKU_DEFAULT_B
 
     total_batches = len(batches)
 
-    # Process batches
-    for batch_num, batch in enumerate(batches, 1):
-        result = translate_with_haiku(batch, api_key, source_lang=source_lang, target_lang=target_lang)
-        all_translations.update(result["translations"])
-        total_input_tokens += result["input_tokens"]
-        total_output_tokens += result["output_tokens"]
+    # Process batches in parallel for speed
+    if total_batches <= 1:
+        # Single batch - no need for threading overhead
+        for batch_num, batch in enumerate(batches, 1):
+            result = translate_with_haiku(batch, api_key, source_lang=source_lang, target_lang=target_lang)
+            all_translations.update(result["translations"])
+            total_input_tokens += result["input_tokens"]
+            total_output_tokens += result["output_tokens"]
+            if progress_callback:
+                progress_callback(batch_num, total_batches)
+    else:
+        # Multiple batches - process in parallel
+        completed_count = 0
+        results_lock = threading.Lock()
 
-        # Call progress callback if provided
-        if progress_callback:
-            progress_callback(batch_num, total_batches)
+        def process_batch(batch_info):
+            batch_num, batch = batch_info
+            return batch_num, translate_with_haiku(batch, api_key, source_lang=source_lang, target_lang=target_lang)
+
+        with ThreadPoolExecutor(max_workers=PARALLEL_API_BATCHES) as executor:
+            futures = {
+                executor.submit(process_batch, (i, batch)): i
+                for i, batch in enumerate(batches, 1)
+            }
+
+            for future in as_completed(futures):
+                batch_num, result = future.result()
+                with results_lock:
+                    all_translations.update(result["translations"])
+                    total_input_tokens += result["input_tokens"]
+                    total_output_tokens += result["output_tokens"]
+                    completed_count += 1
+
+                if progress_callback:
+                    progress_callback(completed_count, total_batches)
 
     # Return results
     return {
