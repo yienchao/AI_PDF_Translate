@@ -1,6 +1,6 @@
 """Anthropic API Translation Helper using Claude Haiku 4.5"""
 import json
-from anthropic import Anthropic
+from anthropic import Anthropic, AuthenticationError, PermissionDeniedError, RateLimitError, APIStatusError, APIConnectionError, APITimeoutError
 
 # Configuration constants
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -54,15 +54,28 @@ Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON
 {json.dumps(texts, ensure_ascii=False, indent=2)}"""
 
     # Call Claude Haiku 4.5 (no caching)
-    message = client.messages.create(
-        model=HAIKU_MODEL,
-        max_tokens=HAIKU_MAX_OUTPUT_TOKENS,
-        system=prompt,
-        messages=[{
-            "role": "user",
-            "content": "Translate the texts provided in the system prompt."
-        }]
-    )
+    try:
+        message = client.messages.create(
+            model=HAIKU_MODEL,
+            max_tokens=HAIKU_MAX_OUTPUT_TOKENS,
+            system=prompt,
+            messages=[{
+                "role": "user",
+                "content": "Translate the texts provided in the system prompt."
+            }]
+        )
+    except AuthenticationError:
+        raise ValueError("API KEY ERROR: Invalid Anthropic API key. Check your ANTHROPIC_API_KEY.")
+    except PermissionDeniedError as e:
+        raise ValueError(f"CREDITS EXHAUSTED: Your Anthropic account has no remaining credits. Add credits at console.anthropic.com. Details: {e}")
+    except RateLimitError as e:
+        raise ValueError(f"RATE LIMITED: Too many requests. Please wait a moment and try again. Details: {e}")
+    except APITimeoutError:
+        raise ValueError("TIMEOUT: The API request timed out after 120 seconds. The server may be overloaded - try again.")
+    except APIConnectionError as e:
+        raise ValueError(f"CONNECTION ERROR: Could not connect to Anthropic API. Check your internet connection. Details: {e}")
+    except APIStatusError as e:
+        raise ValueError(f"API ERROR (HTTP {e.status_code}): {e.message}")
 
     # Parse response
     response_text = message.content[0].text.strip()

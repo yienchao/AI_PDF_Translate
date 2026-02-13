@@ -451,11 +451,13 @@ with tab1:
                         progress_bar = st.progress(0)
                         status_text = st.empty()
                         timer_text = st.empty()
+                        error_placeholder = st.empty()
 
                         total_files = len(uploaded_files)
                         completed = 0
                         total_input_tokens = 0
                         total_output_tokens = 0
+                        translation_failed = False
 
                         # Step 1: Batch translate ALL filenames in one API call
                         status_text.text("Translating filenames...")
@@ -468,19 +470,32 @@ with tab1:
 
                         # Use first key for filename translation
                         filename_api_key = key_manager.get_next_key()
-                        filename_result = translate_filenames_batch(
-                            filenames_to_translate,
-                            filename_api_key,
-                            source_lang,
-                            target_lang
-                        )
+                        try:
+                            filename_result = translate_filenames_batch(
+                                filenames_to_translate,
+                                filename_api_key,
+                                source_lang,
+                                target_lang
+                            )
+                        except Exception as e:
+                            error_placeholder.error(f"Translation failed: {e}")
+                            release_translation_lock()
+                            st.session_state.is_translating = False
+                            translation_failed = True
+                            filename_result = {"translations": {}, "input_tokens": 0, "output_tokens": 0}
 
                         translated_filenames = filename_result["translations"]
                         total_input_tokens += filename_result["input_tokens"]
                         total_output_tokens += filename_result["output_tokens"]
-                        key_manager.record_tokens(filename_api_key, filename_result["input_tokens"] + filename_result["output_tokens"])
+                        if filename_result["input_tokens"] > 0:
+                            key_manager.record_tokens(filename_api_key, filename_result["input_tokens"] + filename_result["output_tokens"])
 
-                        # Step 2: Process files in parallel
+                        # Step 2: Process files in parallel (skip if filename translation already failed)
+                        if translation_failed:
+                            status_text.text("")
+                            progress_bar.empty()
+                            st.stop()
+
                         status_text.text(f"Translating PDFs in parallel (up to {MAX_PARALLEL_TRANSLATIONS} at once)...")
                         progress_bar.progress(0.1)
 
