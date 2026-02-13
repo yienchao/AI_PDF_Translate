@@ -436,178 +436,178 @@ with tab1:
                         import shutil
                         import time
 
-                    # Initialize API key manager
-                    try:
-                        key_manager = get_key_manager()
-                        total_keys = key_manager.get_total_keys()
-                        st.info(f"🔑 Using API key rotation with {total_keys} key(s)")
-                    except ValueError as e:
-                        st.error(f"❌ {e}")
-                        release_translation_lock()
-                        st.session_state.is_translating = False
-                        st.stop()
+                        # Initialize API key manager
+                        try:
+                            key_manager = get_key_manager()
+                            total_keys = key_manager.get_total_keys()
+                            st.info(f"Using API key rotation with {total_keys} key(s)")
+                        except ValueError as e:
+                            st.error(f"{e}")
+                            release_translation_lock()
+                            st.session_state.is_translating = False
+                            st.stop()
 
-                    start_time = time.time()
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    timer_text = st.empty()
+                        start_time = time.time()
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        timer_text = st.empty()
 
-                    total_files = len(uploaded_files)
-                    completed = 0
-                    total_input_tokens = 0
-                    total_output_tokens = 0
+                        total_files = len(uploaded_files)
+                        completed = 0
+                        total_input_tokens = 0
+                        total_output_tokens = 0
 
-                    # Step 1: Batch translate ALL filenames in one API call
-                    status_text.text("🔤 Translating filenames...")
-                    progress_bar.progress(0.05)
+                        # Step 1: Batch translate ALL filenames in one API call
+                        status_text.text("Translating filenames...")
+                        progress_bar.progress(0.05)
 
-                    filenames_to_translate = {
-                        f"file_{idx}": uploaded_file.name.replace('.pdf', '')
-                        for idx, uploaded_file in enumerate(uploaded_files)
-                    }
-
-                    # Use first key for filename translation
-                    filename_api_key = key_manager.get_next_key()
-                    filename_result = translate_filenames_batch(
-                        filenames_to_translate,
-                        filename_api_key,
-                        source_lang,
-                        target_lang
-                    )
-
-                    translated_filenames = filename_result["translations"]
-                    total_input_tokens += filename_result["input_tokens"]
-                    total_output_tokens += filename_result["output_tokens"]
-                    key_manager.record_tokens(filename_api_key, filename_result["input_tokens"] + filename_result["output_tokens"])
-
-                    # Step 2: Process files in parallel
-                    status_text.text(f"🚀 Translating PDFs in parallel (up to {MAX_PARALLEL_TRANSLATIONS} at once)...")
-                    progress_bar.progress(0.1)
-
-                    # Shared state for progress tracking
-                    completed_lock = threading.Lock()
-
-                    # Use ThreadPoolExecutor for parallel processing
-                    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_TRANSLATIONS) as executor:
-                        # Submit all translation tasks
-                        future_to_file = {
-                            executor.submit(
-                                process_single_file,
-                                idx,
-                                uploaded_file,
-                                key_manager,  # Pass key manager instead of single key
-                                source_lang,
-                                target_lang,
-                                translated_filenames,
-                                UPLOAD_DIR,
-                                OUTPUT_DIR
-                            ): (idx, uploaded_file) for idx, uploaded_file in enumerate(uploaded_files)
+                        filenames_to_translate = {
+                            f"file_{idx}": uploaded_file.name.replace('.pdf', '')
+                            for idx, uploaded_file in enumerate(uploaded_files)
                         }
 
-                        # Process completed tasks as they finish
-                        for future in as_completed(future_to_file):
-                            idx, uploaded_file = future_to_file[future]
+                        # Use first key for filename translation
+                        filename_api_key = key_manager.get_next_key()
+                        filename_result = translate_filenames_batch(
+                            filenames_to_translate,
+                            filename_api_key,
+                            source_lang,
+                            target_lang
+                        )
 
-                            try:
-                                file_idx, success, input_tokens, output_tokens, final_output_name, error_msg, api_key_id = future.result()
+                        translated_filenames = filename_result["translations"]
+                        total_input_tokens += filename_result["input_tokens"]
+                        total_output_tokens += filename_result["output_tokens"]
+                        key_manager.record_tokens(filename_api_key, filename_result["input_tokens"] + filename_result["output_tokens"])
 
-                                if success:
-                                    with completed_lock:
-                                        completed += 1
-                                        total_input_tokens += input_tokens
-                                        total_output_tokens += output_tokens
+                        # Step 2: Process files in parallel
+                        status_text.text(f"Translating PDFs in parallel (up to {MAX_PARALLEL_TRANSLATIONS} at once)...")
+                        progress_bar.progress(0.1)
 
-                                    # Log to database if Supabase is configured
-                                    user_id = get_user_id()
-                                    if user_id and st.session_state.get("supabase"):
-                                        file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
-                                        logged = log_translation_to_database(
-                                            st.session_state.supabase,
-                                            user_id,
-                                            {
-                                                "original_filename": uploaded_file.name,
-                                                "translated_filename": final_output_name,
-                                                "input_tokens": input_tokens,
-                                                "output_tokens": output_tokens,
-                                                "file_size_bytes": file_size,
-                                                "status": "completed"
-                                            }
-                                        )
-                                        if not logged:
-                                            st.warning(f"⚠️ {uploaded_file.name}: Translation completed but history wasn't saved")
+                        # Shared state for progress tracking
+                        completed_lock = threading.Lock()
 
-                                    # Show tokens for this file with API key used
-                                    file_tokens = input_tokens + output_tokens
-                                    st.success(f"✅ {uploaded_file.name}: {file_tokens:,} tokens ({input_tokens:,} in + {output_tokens:,} out) [{api_key_id}]")
-                                else:
-                                    st.error(f"❌ {uploaded_file.name}: {error_msg} [{api_key_id}]")
+                        # Use ThreadPoolExecutor for parallel processing
+                        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_TRANSLATIONS) as executor:
+                            # Submit all translation tasks
+                            future_to_file = {
+                                executor.submit(
+                                    process_single_file,
+                                    idx,
+                                    uploaded_file,
+                                    key_manager,
+                                    source_lang,
+                                    target_lang,
+                                    translated_filenames,
+                                    UPLOAD_DIR,
+                                    OUTPUT_DIR
+                                ): (idx, uploaded_file) for idx, uploaded_file in enumerate(uploaded_files)
+                            }
 
-                            except Exception as e:
-                                st.error(f"❌ Failed to translate {uploaded_file.name}: {e}")
+                            # Process completed tasks as they finish
+                            for future in as_completed(future_to_file):
+                                idx, uploaded_file = future_to_file[future]
 
-                            # Update progress bar and timer after each file completes
-                            with completed_lock:
-                                current_completed = completed
-                            elapsed = time.time() - start_time
-                            progress_bar.progress(0.1 + (current_completed / total_files) * 0.9)
-                            status_text.text(f"📊 Translating ({current_completed}/{total_files} complete, {MAX_PARALLEL_TRANSLATIONS} parallel)...")
-                            timer_text.text(f"⏱️ Elapsed: {elapsed:.1f}s")
+                                try:
+                                    file_idx, success, input_tokens, output_tokens, final_output_name, error_msg, api_key_id = future.result()
 
-                    # Final time
-                    total_time = time.time() - start_time
-                    minutes = int(total_time // 60)
-                    seconds = total_time % 60
+                                    if success:
+                                        with completed_lock:
+                                            completed += 1
+                                            total_input_tokens += input_tokens
+                                            total_output_tokens += output_tokens
 
-                    if minutes > 0:
-                        time_str = f"{minutes}m {seconds:.1f}s"
-                    else:
-                        time_str = f"{seconds:.1f}s"
+                                        # Log to database if Supabase is configured
+                                        current_user_id = get_user_id()
+                                        if current_user_id and st.session_state.get("supabase"):
+                                            file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
+                                            logged = log_translation_to_database(
+                                                st.session_state.supabase,
+                                                current_user_id,
+                                                {
+                                                    "original_filename": uploaded_file.name,
+                                                    "translated_filename": final_output_name,
+                                                    "input_tokens": input_tokens,
+                                                    "output_tokens": output_tokens,
+                                                    "file_size_bytes": file_size,
+                                                    "status": "completed"
+                                                }
+                                            )
+                                            if not logged:
+                                                st.warning(f"{uploaded_file.name}: Translation completed but history wasn't saved")
 
-                    # Calculate cost
-                    total_tokens = total_input_tokens + total_output_tokens
-                    cost_input = (total_input_tokens / 1_000_000) * HAIKU_PRICE_INPUT_PER_1M
-                    cost_output = (total_output_tokens / 1_000_000) * HAIKU_PRICE_OUTPUT_PER_1M
-                    total_cost = cost_input + cost_output
+                                        # Show tokens for this file with API key used
+                                        file_tokens = input_tokens + output_tokens
+                                        st.success(f"{uploaded_file.name}: {file_tokens:,} tokens [{api_key_id}]")
+                                    else:
+                                        st.error(f"{uploaded_file.name}: {error_msg} [{api_key_id}]")
 
-                    # Show final summary
-                    status_text.text("")
-                    timer_text.text(f"⏱️ Total time: {time_str}")
-                    progress_bar.empty()
+                                except Exception as e:
+                                    st.error(f"Failed to translate {uploaded_file.name}: {e}")
 
-                    st.success(f"✅ Batch translation complete! Processed {completed}/{total_files} files in {time_str}")
+                                # Update progress bar and timer after each file completes
+                                with completed_lock:
+                                    current_completed = completed
+                                elapsed = time.time() - start_time
+                                progress_bar.progress(0.1 + (current_completed / total_files) * 0.9)
+                                status_text.text(f"Translating ({current_completed}/{total_files} complete)...")
+                                timer_text.text(f"Elapsed: {elapsed:.1f}s")
 
-                    # Show token usage (cost hidden but still logged to database)
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Tokens", f"{total_tokens:,}")
-                    with col2:
-                        st.metric("Input", f"{total_input_tokens:,}")
-                    with col3:
-                        st.metric("Output", f"{total_output_tokens:,}")
+                        # Final time
+                        total_time = time.time() - start_time
+                        minutes = int(total_time // 60)
+                        seconds = total_time % 60
 
-                    # Show API key rotation stats if multiple keys
-                    if total_keys > 1:
-                        st.divider()
-                        st.subheader("🔑 API Key Usage")
-                        key_stats = key_manager.get_stats()
-                        cols = st.columns(min(total_keys, 4))  # Max 4 columns
-                        for i, (key_id, stats) in enumerate(key_stats.items()):
-                            with cols[i % len(cols)]:
-                                st.metric(
-                                    key_id,
-                                    f"{stats['requests']} reqs",
-                                    delta=f"{stats['tokens']:,} tokens",
-                                    delta_color="off"
-                                )
-                                if stats['errors'] > 0:
-                                    st.caption(f"⚠️ {stats['errors']} errors")
+                        if minutes > 0:
+                            time_str = f"{minutes}m {seconds:.1f}s"
+                        else:
+                            time_str = f"{seconds:.1f}s"
 
-                    st.info("Check the 'Files' tab to download your translated PDFs")
+                        # Calculate cost
+                        total_tokens = total_input_tokens + total_output_tokens
+                        cost_input = (total_input_tokens / 1_000_000) * HAIKU_PRICE_INPUT_PER_1M
+                        cost_output = (total_output_tokens / 1_000_000) * HAIKU_PRICE_OUTPUT_PER_1M
+                        total_cost = cost_input + cost_output
 
-                    # Release lock and reset translation state
-                    release_translation_lock()
-                    st.session_state.is_translating = False
-                    st.session_state.translation_completed = True
+                        # Show final summary
+                        status_text.text("")
+                        timer_text.text(f"Total time: {time_str}")
+                        progress_bar.empty()
+
+                        st.success(f"Batch translation complete! Processed {completed}/{total_files} files in {time_str}")
+
+                        # Show token usage
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Tokens", f"{total_tokens:,}")
+                        with col2:
+                            st.metric("Input", f"{total_input_tokens:,}")
+                        with col3:
+                            st.metric("Output", f"{total_output_tokens:,}")
+
+                        # Show API key rotation stats if multiple keys
+                        if total_keys > 1:
+                            st.divider()
+                            st.subheader("API Key Usage")
+                            key_stats = key_manager.get_stats()
+                            cols = st.columns(min(total_keys, 4))
+                            for i, (key_id, stats) in enumerate(key_stats.items()):
+                                with cols[i % len(cols)]:
+                                    st.metric(
+                                        key_id,
+                                        f"{stats['requests']} reqs",
+                                        delta=f"{stats['tokens']:,} tokens",
+                                        delta_color="off"
+                                    )
+                                    if stats['errors'] > 0:
+                                        st.caption(f"{stats['errors']} errors")
+
+                        st.info("Check the 'Files' tab to download your translated PDFs")
+
+                        # Release lock and reset translation state
+                        release_translation_lock()
+                        st.session_state.is_translating = False
+                        st.session_state.translation_completed = True
         else:
             # Translation completed - show summary and allow uploading new files
             st.success("Translation complete! Your files are ready in the 'Files' tab.")
