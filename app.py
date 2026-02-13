@@ -22,12 +22,58 @@ from api_key_manager import get_key_manager
 # Configuration constants
 HAIKU_PRICE_INPUT_PER_1M = 0.80
 HAIKU_PRICE_OUTPUT_PER_1M = 4.00
-MAX_PARALLEL_TRANSLATIONS = 5  # 5 parallel safe with 2GB RAM (Standard instance)
+MAX_PARALLEL_TRANSLATIONS = 2  # Reduced for multi-user stability
 MAX_FILE_SIZE_MB = 50  # Maximum file size per PDF to prevent memory exhaustion
 MAX_TOTAL_UPLOAD_MB = 100  # Maximum total upload size per batch
 MAX_OUTPUT_FILES = 20  # Maximum number of output files to keep per user (cleanup oldest)
+LOCK_FILE = Path("translation_lock.txt")
+LOCK_TIMEOUT_SECONDS = 300  # 5 minutes - assume stuck if older than this
 
 # Helper functions
+def acquire_translation_lock(user_id):
+    """Try to acquire the translation lock. Returns True if acquired, False if busy."""
+    import time
+    try:
+        if LOCK_FILE.exists():
+            # Check if lock is stale (older than timeout)
+            lock_age = time.time() - LOCK_FILE.stat().st_mtime
+            if lock_age > LOCK_TIMEOUT_SECONDS:
+                # Stale lock, remove it
+                LOCK_FILE.unlink()
+            else:
+                # Lock is held by someone else
+                return False
+        # Create lock file with user ID
+        LOCK_FILE.write_text(f"{user_id}:{time.time()}")
+        return True
+    except Exception:
+        return False
+
+def release_translation_lock():
+    """Release the translation lock."""
+    try:
+        if LOCK_FILE.exists():
+            LOCK_FILE.unlink()
+    except Exception:
+        pass
+
+def get_lock_status():
+    """Get current lock status. Returns (is_locked, user_id, seconds_elapsed)."""
+    import time
+    try:
+        if LOCK_FILE.exists():
+            content = LOCK_FILE.read_text()
+            parts = content.split(":")
+            if len(parts) == 2:
+                lock_user = parts[0]
+                lock_time = float(parts[1])
+                elapsed = time.time() - lock_time
+                return True, lock_user, elapsed
+        return False, None, 0
+    except Exception:
+        return False, None, 0
+
+
 def cleanup_old_output_files(output_dir, max_files=MAX_OUTPUT_FILES):
     """Remove oldest output files if count exceeds max_files to prevent disk/memory bloat."""
     try:
@@ -366,18 +412,29 @@ with tab1:
         if not st.session_state.translation_completed:
             st.header(f"Batch Translate ({source_lang} → {target_lang})")
 
-            # Batch translate button - disabled during translation
-            button_disabled = st.session_state.is_translating or source_lang == target_lang
-            if st.button("🤖 Batch Translate All Files", type="primary", width="stretch", disabled=button_disabled):
-                if source_lang == target_lang:
-                    st.error("❌ Cannot translate: Source and target languages are the same!")
-                elif not st.session_state.get("anthropic_api_key"):
-                    st.error("❌ API Key not found! Set ANTHROPIC_API_KEY environment variable on Render.")
-                else:
-                    # Set translation state to true
-                    st.session_state.is_translating = True
-                    import shutil
-                    import time
+            # Check if another user is translating
+            is_locked, lock_user, lock_elapsed = get_lock_status()
+            if is_locked and lock_user != user_id:
+                st.warning(f"Another translation is in progress ({int(lock_elapsed)}s elapsed). Please wait...")
+                st.info("The page will auto-refresh when ready. Or click below to check status.")
+                if st.button("Check Status"):
+                    st.rerun()
+            else:
+                # Batch translate button - disabled during translation
+                button_disabled = st.session_state.is_translating or source_lang == target_lang
+                if st.button("Batch Translate All Files", type="primary", disabled=button_disabled):
+                    if source_lang == target_lang:
+                        st.error("Cannot translate: Source and target languages are the same!")
+                    elif not st.session_state.get("anthropic_api_key"):
+                        st.error("API Key not found! Set ANTHROPIC_API_KEY environment variable on Render.")
+                    elif not acquire_translation_lock(user_id):
+                        st.error("Another translation just started. Please wait and try again.")
+                        st.rerun()
+                    else:
+                        # Set translation state to true
+                        st.session_state.is_translating = True
+                        import shutil
+                        import time
 
                     # Initialize API key manager
                     try:
@@ -386,6 +443,7 @@ with tab1:
                         st.info(f"🔑 Using API key rotation with {total_keys} key(s)")
                     except ValueError as e:
                         st.error(f"❌ {e}")
+                        release_translation_lock()
                         st.session_state.is_translating = False
                         st.stop()
 
@@ -544,9 +602,10 @@ with tab1:
                                 if stats['errors'] > 0:
                                     st.caption(f"⚠️ {stats['errors']} errors")
 
-                    st.info("📁 Check the 'Files' tab to download your translated PDFs")
+                    st.info("Check the 'Files' tab to download your translated PDFs")
 
-                    # Reset translation state and mark as completed
+                    # Release lock and reset translation state
+                    release_translation_lock()
                     st.session_state.is_translating = False
                     st.session_state.translation_completed = True
         else:
