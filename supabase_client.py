@@ -88,13 +88,16 @@ class SupabaseHelper:
             Dict with the created translation record
         """
         data = {
-            "user_id": user_id,
             "original_filename": original_filename,
             "translated_filename": translated_filename,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
             "status": status,
         }
+
+        if user_id is not None:
+            data["user_id"] = user_id
 
         if file_size_bytes is not None:
             data["file_size_bytes"] = file_size_bytes
@@ -125,15 +128,10 @@ class SupabaseHelper:
         Returns:
             List of translation records
         """
-        response = (
-            self.client.table("translations")
-            .select("*")
-            .eq("user_id", user_id)
-            .order("created_at", desc=True)
-            .limit(limit)
-            .offset(offset)
-            .execute()
-        )
+        query = self.client.table("translations").select("*")
+        if user_id is not None:
+            query = query.eq("user_id", user_id)
+        response = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
         return response.data
 
     def get_user_stats(self, user_id: str) -> Dict[str, Any]:
@@ -146,23 +144,23 @@ class SupabaseHelper:
         Returns:
             Dict with stats (total_translations, total_tokens_used, total_cost_usd, etc.)
         """
-        response = (
-            self.client.table("user_translation_stats")
-            .select("*")
-            .eq("user_id", user_id)
-            .execute()
-        )
+        # Query translations table directly for stats
+        query = self.client.table("translations").select("input_tokens, output_tokens, total_tokens")
+        if user_id is not None:
+            query = query.eq("user_id", user_id)
+        response = query.execute()
 
         if response.data:
-            return response.data[0]
-        else:
-            # Return empty stats if user has no translations yet
+            total_translations = len(response.data)
+            total_tokens = sum(r.get("total_tokens", 0) or 0 for r in response.data)
             return {
-                "user_id": user_id,
+                "total_translations": total_translations,
+                "total_tokens_used": total_tokens,
+            }
+        else:
+            return {
                 "total_translations": 0,
                 "total_tokens_used": 0,
-                "total_cost_usd": 0.0,
-                "last_translation_at": None
             }
 
     def update_translation_status(
@@ -197,6 +195,133 @@ class SupabaseHelper:
             .execute()
         )
         return response.data[0] if response.data else {}
+
+    def create_job(
+        self,
+        user_id: str,
+        original_filename: str,
+        file_path: str,
+        source_language: str,
+        target_language: str,
+        file_size_bytes: Optional[int] = None,
+        priority: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Create a new translation job in the queue
+
+        Args:
+            user_id: UUID of the user
+            original_filename: Original PDF filename
+            file_path: Path to uploaded file
+            source_language: Source language
+            target_language: Target language
+            file_size_bytes: Size of file in bytes
+            priority: Job priority (higher = processed first)
+
+        Returns:
+            Dict with the created job record
+        """
+        data = {
+            "user_id": user_id,
+            "original_filename": original_filename,
+            "file_path": file_path,
+            "source_language": source_language,
+            "target_language": target_language,
+            "status": "pending",
+            "priority": priority
+        }
+
+        if file_size_bytes:
+            data["file_size_bytes"] = file_size_bytes
+
+        response = self.client.table("translation_jobs").insert(data).execute()
+        return response.data[0] if response.data else {}
+
+    def update_job(
+        self,
+        job_id: str,
+        status: Optional[str] = None,
+        translated_filename: Optional[str] = None,
+        output_path: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        error_message: Optional[str] = None,
+        assigned_api_key_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Update a translation job
+
+        Args:
+            job_id: UUID of the job
+            status: New status
+            translated_filename: Translated filename
+            output_path: Path to output file
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+            error_message: Error message if failed
+            assigned_api_key_id: Which API key was used
+
+        Returns:
+            Updated job record
+        """
+        data = {}
+
+        if status:
+            data["status"] = status
+            if status == "processing":
+                data["started_at"] = datetime.utcnow().isoformat()
+            elif status in ["completed", "failed"]:
+                data["completed_at"] = datetime.utcnow().isoformat()
+
+        if translated_filename:
+            data["translated_filename"] = translated_filename
+        if output_path:
+            data["output_path"] = output_path
+        if input_tokens is not None:
+            data["input_tokens"] = input_tokens
+        if output_tokens is not None:
+            data["output_tokens"] = output_tokens
+        if error_message:
+            data["error_message"] = error_message
+        if assigned_api_key_id:
+            data["assigned_api_key_id"] = assigned_api_key_id
+
+        response = (
+            self.client.table("translation_jobs")
+            .update(data)
+            .eq("id", job_id)
+            .execute()
+        )
+        return response.data[0] if response.data else {}
+
+    def get_user_jobs(
+        self,
+        user_id: str,
+        status: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Get translation jobs for a user
+
+        Args:
+            user_id: UUID of the user
+            status: Filter by status (pending, processing, completed, failed)
+            limit: Maximum number of records
+
+        Returns:
+            List of job records
+        """
+        query = (
+            self.client.table("translation_jobs")
+            .select("*")
+            .eq("user_id", user_id)
+        )
+
+        if status:
+            query = query.eq("status", status)
+
+        response = query.order("created_at", desc=True).limit(limit).execute()
+        return response.data
 
 
 # Convenience function to get a configured client

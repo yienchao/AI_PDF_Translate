@@ -259,6 +259,13 @@ st.set_page_config(
 # Require authentication (or allow local mode if Supabase not configured)
 require_auth()
 
+# Initialize Supabase client for translation logging (independent of user auth)
+if "supabase" not in st.session_state:
+    try:
+        st.session_state.supabase = get_supabase_client()
+    except Exception:
+        st.session_state.supabase = None  # Supabase not configured, logging disabled
+
 # Create necessary directories based on user
 user_id = get_user_id()
 if user_id:
@@ -533,12 +540,11 @@ with tab1:
                                             total_output_tokens += output_tokens
 
                                         # Log to database if Supabase is configured
-                                        current_user_id = get_user_id()
-                                        if current_user_id and st.session_state.get("supabase"):
+                                        if st.session_state.get("supabase"):
                                             file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
                                             logged = log_translation_to_database(
                                                 st.session_state.supabase,
-                                                current_user_id,
+                                                get_user_id(),
                                                 {
                                                     "original_filename": uploaded_file.name,
                                                     "translated_filename": final_output_name,
@@ -663,15 +669,15 @@ with tab2:
 with tab3:
     st.header("📊 Translation History")
 
-    # Only show history if Supabase is configured and user is authenticated
-    user_id = get_user_id()
-    if user_id and st.session_state.get("supabase"):
+    # Show history if Supabase is configured
+    history_user_id = get_user_id()
+    if st.session_state.get("supabase"):
         # Get user stats
         try:
-            stats = st.session_state.supabase.get_user_stats(user_id)
+            stats = st.session_state.supabase.get_user_stats(history_user_id)
 
-            # Display statistics (cost hidden from UI but tracked in database)
-            st.subheader("Your Statistics")
+            # Display statistics
+            st.subheader("Statistics")
             col1, col2 = st.columns(2)
 
             with col1:
@@ -682,7 +688,7 @@ with tab3:
             st.divider()
 
             # Get translation history
-            translations = st.session_state.supabase.get_user_translations(user_id, limit=50)
+            translations = st.session_state.supabase.get_user_translations(history_user_id, limit=50)
 
             if translations:
                 st.subheader("Recent Translations")
@@ -708,7 +714,7 @@ with tab3:
         except Exception as e:
             st.error(f"Failed to load history: {e}")
     else:
-        st.info("History is only available when logged in with Supabase")
+        st.info("History is unavailable - Supabase not configured")
 
 # Footer
 st.divider()
