@@ -1,0 +1,6 @@
+[server]
+# Required for running behind Render's reverse proxy
+enableXsrfProtection = false
+enableCORS = false
+headless = true
+maxUploadSize = 50
