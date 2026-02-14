@@ -253,20 +253,7 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
         page = doc[page_num]
         page_elements = [e for e in text_elements if e["page"] == page_num]
 
-        # Cover original text with white rectangles (only for translated elements, leave skipped text untouched)
-        for elem in page_elements:
-            if elem.get("type") == "skip":
-                continue
-            bbox = elem["bbox"]
-            rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
-            page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1))
-
-        # Insert translated text
-        try:
-            font = fitz.Font("helv")
-        except Exception:
-            font = fitz.Font()
-
+        # Use redactions to properly replace text (removes original, inserts translation)
         success_count = 0
         for elem in page_elements:
             if elem.get("type") == "skip":
@@ -297,39 +284,34 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             )
 
             try:
-                # Calculate available width
-                available_width = bbox[2] - bbox[0]
-                available_height = bbox[3] - bbox[1]
-
-                # Try to fit text with automatic font size reduction if needed
+                # Fit text: reduce font size if needed
                 current_size = size
-                min_size = size * 0.5  # Don't go below 50% of original size
+                available_width = bbox[2] - bbox[0]
+                min_size = size * 0.5
 
                 while current_size >= min_size:
-                    # Estimate text width (approximate: 0.5 * fontsize per character)
                     estimated_width = len(translated) * current_size * 0.5
-
                     if estimated_width <= available_width:
                         break
-
-                    # Reduce font size by 10%
                     current_size *= 0.9
 
-                # Insert text with adjusted font size
-                page.insert_text(
-                    (bbox[0], bbox[3] - 1),
-                    translated,
+                rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
+                page.add_redact_annot(
+                    rect,
+                    text=translated,
                     fontsize=current_size,
-                    color=color,
-                    render_mode=0
+                    text_color=color,
+                    fill=(1, 1, 1)
                 )
                 success_count += 1
-            except Exception as e:
-                # Skip text that can't be inserted (invalid coordinates, font issues, etc.)
+            except Exception:
                 pass
 
+        # Apply all redactions for this page at once
+        page.apply_redactions()
+
         if page_num == 0:
-            safe_print(f"   Inserted {success_count}/{len(page_elements)} texts on page 1")
+            safe_print(f"   Replaced {success_count}/{len(page_elements)} texts on page 1")
 
         # MEMORY OPTIMIZATION: Clear page elements after processing each page
         page_elements.clear()
