@@ -431,6 +431,19 @@ with tab1:
                 if st.button("Check Status"):
                     st.rerun()
             else:
+                # Estimate translation time
+                total_files = len(uploaded_files)
+                if total_files == 1:
+                    est_seconds = int(10 + (total_size_mb * 5))
+                else:
+                    parallel = min(total_files, MAX_PARALLEL_TRANSLATIONS)
+                    est_seconds = int(10 + (total_size_mb * 5) / parallel * total_files / parallel)
+                if est_seconds < 60:
+                    est_str = f"~{est_seconds}s"
+                else:
+                    est_str = f"~{est_seconds // 60}m {est_seconds % 60}s"
+                st.caption(f"Estimated time: {est_str}")
+
                 # Batch translate button - disabled during translation
                 button_disabled = st.session_state.is_translating or source_lang == target_lang
                 if st.button("Batch Translate All Files", type="primary", disabled=button_disabled):
@@ -438,10 +451,16 @@ with tab1:
                         st.error("Cannot translate: Source and target languages are the same!")
                     elif not st.session_state.get("anthropic_api_key"):
                         st.error("API Key not found! Set ANTHROPIC_API_KEY environment variable on Render.")
-                    elif not acquire_translation_lock(user_id):
-                        st.error("Another translation just started. Please wait and try again.")
-                        st.rerun()
                     else:
+                        # Wait for lock if another session is translating
+                        import time as _time
+                        wait_placeholder = st.empty()
+                        while not acquire_translation_lock(user_id):
+                            is_locked, _, elapsed = get_lock_status()
+                            if is_locked:
+                                wait_placeholder.info(f"Another translation in progress ({int(elapsed)}s elapsed). Waiting in queue...")
+                            _time.sleep(5)
+                        wait_placeholder.empty()
                         # Set translation state to true
                         st.session_state.is_translating = True
                         import shutil
