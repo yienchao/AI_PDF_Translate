@@ -414,6 +414,11 @@ with tab1:
         if "translation_completed" not in st.session_state:
             st.session_state.translation_completed = False
 
+        # Reset completed state if uploaded files changed
+        current_files = frozenset(f.name for f in uploaded_files)
+        if current_files != st.session_state.get("last_translated_files"):
+            st.session_state.translation_completed = False
+
         # Only show batch translate section if translation hasn't been completed
         if not st.session_state.translation_completed:
             st.header(f"Batch Translate ({source_lang} → {target_lang})")
@@ -672,29 +677,13 @@ with tab1:
                         with col3:
                             st.metric("Output", f"{total_output_tokens:,}")
 
-                        # Show API key rotation stats if multiple keys
-                        if total_keys > 1:
-                            st.divider()
-                            st.subheader("API Key Usage")
-                            key_stats = key_manager.get_stats()
-                            cols = st.columns(min(total_keys, 4))
-                            for i, (key_id, stats) in enumerate(key_stats.items()):
-                                with cols[i % len(cols)]:
-                                    st.metric(
-                                        key_id,
-                                        f"{stats['requests']} reqs",
-                                        delta=f"{stats['tokens']:,} tokens",
-                                        delta_color="off"
-                                    )
-                                    if stats['errors'] > 0:
-                                        st.caption(f"{stats['errors']} errors")
-
                         st.info("Check the 'Files' tab to download your translated PDFs")
 
                         # Release lock and reset translation state
                         release_translation_lock()
                         st.session_state.is_translating = False
                         st.session_state.translation_completed = True
+                        st.session_state.last_translated_files = current_files
         else:
             # Translation completed - show summary and allow uploading new files
             st.success("Translation complete! Your files are ready in the 'Files' tab.")
