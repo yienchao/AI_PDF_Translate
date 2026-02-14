@@ -50,11 +50,9 @@ def should_skip(text):
         if text.lower() in material_codes:
             return True
 
-    # Skip reference codes like "PL1", "MF2", "A-505", "G485"
-    if REFERENCE_CODE_PATTERN_1.match(text):
-        return True
-    if REFERENCE_CODE_PATTERN_2.match(text):
-        return True
+    # Don't skip reference codes (C22, PL1, A-505, etc.)
+    # They need to go through the redact pipeline so they survive
+    # nearby redactions that would otherwise destroy them
 
     return False
 
@@ -98,24 +96,60 @@ def extract_text_from_pdf(pdf_path):
         blocks = page.get_text("dict")["blocks"]
 
         page_spans = []
+        rotated_spans = []
         for block in blocks:
             if block.get("type") == 0:
                 for line in block.get("lines", []):
                     # Check text direction: (1,0)=horizontal, anything else=rotated
                     line_dir = line.get("dir", (1, 0))
                     is_rotated = abs(line_dir[0]) < 0.5  # Not horizontal
-                    for span in line.get("spans", []):
-                        text = span.get("text", "").strip()
-                        if text:
-                            page_spans.append({
-                                "text": text,
-                                "bbox": list(span["bbox"]),
-                                "size": span["size"],
-                                "color": span.get("color", 0),
-                                "rotated": is_rotated
+
+                    if is_rotated:
+                        # Merge all spans in a rotated line into one element
+                        line_text = ""
+                        line_bbox = None
+                        line_size = 0
+                        line_color = 0
+                        for span in line.get("spans", []):
+                            text = span.get("text", "").strip()
+                            if text:
+                                line_text += text
+                                if line_bbox is None:
+                                    line_bbox = list(span["bbox"])
+                                else:
+                                    line_bbox[0] = min(line_bbox[0], span["bbox"][0])
+                                    line_bbox[1] = min(line_bbox[1], span["bbox"][1])
+                                    line_bbox[2] = max(line_bbox[2], span["bbox"][2])
+                                    line_bbox[3] = max(line_bbox[3], span["bbox"][3])
+                                line_size = max(line_size, span["size"])
+                                line_color = span.get("color", 0)
+                        if line_text.strip() and line_bbox:
+                            # Determine rotation angle from direction
+                            import math
+                            angle = round(math.degrees(math.atan2(line_dir[1], line_dir[0])))
+                            rotated_spans.append({
+                                "text": line_text.strip(),
+                                "bbox": line_bbox,
+                                "size": line_size,
+                                "color": line_color,
+                                "rotated": True,
+                                "rotation_angle": angle
                             })
+                    else:
+                        for span in line.get("spans", []):
+                            text = span.get("text", "").strip()
+                            if text:
+                                page_spans.append({
+                                    "text": text,
+                                    "bbox": list(span["bbox"]),
+                                    "size": span["size"],
+                                    "color": span.get("color", 0),
+                                    "rotated": False
+                                })
 
         merged = merge_text_spans(page_spans)
+        # Add rotated spans (already merged at line level)
+        merged.extend(rotated_spans)
 
         for item in merged:
             all_text.append({
@@ -163,27 +197,20 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
     needs_translation = {}  # {index: french_text}
     skipped = 0
 
-    rotated_count = 0
     for idx, elem in enumerate(text_elements):
         text = elem["text"]
 
-        # Skip rotated/vertical text (can't redact rotated text properly)
-        if elem.get("rotated"):
-            elem["translated"] = text
-            elem["type"] = "skip"
-            rotated_count += 1
         # Skip numbers/units
-        elif should_skip(text):
+        if should_skip(text):
             elem["translated"] = text
             elem["type"] = "skip"
             skipped += 1
         else:
-            # EVERYTHING ELSE → Haiku (NO dictionary check!)
+            # EVERYTHING ELSE → Haiku (including rotated text)
             elem["type"] = "needs_haiku"
             needs_translation[str(idx)] = text
 
     safe_print(f"   Skipped (numbers/units): {skipped}")
-    safe_print(f"   Skipped (rotated text): {rotated_count}")
     safe_print(f"   Sending to Haiku: {len(needs_translation)}")
 
     # Translate with Haiku
@@ -265,11 +292,20 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
         page = doc[page_num]
         page_elements = [e for e in text_elements if e["page"] == page_num]
 
-        # Use redactions to properly replace text (removes original, inserts translation)
-        success_count = 0
+        # Separate horizontal and rotated elements
+        horizontal_elems = []
+        rotated_elems = []
         for elem in page_elements:
             if elem.get("type") == "skip":
                 continue
+            if elem.get("rotated"):
+                rotated_elems.append(elem)
+            else:
+                horizontal_elems.append(elem)
+
+        # Step 1: Redactions for horizontal text
+        success_count = 0
+        for elem in horizontal_elems:
             translated = elem.get("translated", elem["text"])
             bbox = elem["bbox"]
             size = elem["size"]
@@ -277,17 +313,10 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             if not translated:
                 continue
 
-            # Sanitize text: replace Unicode characters that PDF fonts don't support
-            translated = translated.replace('\u2192', '->')  # → arrow
-            translated = translated.replace('\u2013', '-')  # en dash
-            translated = translated.replace('\u2014', '--')  # em dash
-            translated = translated.replace('\u2018', "'")  # left single quote
-            translated = translated.replace('\u2019', "'")  # right single quote
-            translated = translated.replace('\u201c', '"')  # left double quote
-            translated = translated.replace('\u201d', '"')  # right double quote
-            translated = translated.replace('\u2026', '...')  # ellipsis
+            translated = translated.replace('\u2192', '->').replace('\u2013', '-').replace('\u2014', '--')
+            translated = translated.replace('\u2018', "'").replace('\u2019', "'")
+            translated = translated.replace('\u201c', '"').replace('\u201d', '"').replace('\u2026', '...')
 
-            # Color conversion
             color_int = elem["color"]
             color = (
                 ((color_int >> 16) & 0xFF) / 255.0,
@@ -296,7 +325,6 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             )
 
             try:
-                # Use original font size - redaction will handle fitting
                 rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
                 page.add_redact_annot(
                     rect,
@@ -309,8 +337,51 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             except Exception:
                 pass
 
-        # Apply all redactions for this page at once
         page.apply_redactions()
+
+        # Step 2: White-box + insert_text with rotation for rotated text
+        for elem in rotated_elems:
+            translated = elem.get("translated", elem["text"])
+            bbox = elem["bbox"]
+            size = elem["size"]
+
+            if not translated:
+                continue
+
+            translated = translated.replace('\u2192', '->').replace('\u2013', '-').replace('\u2014', '--')
+            translated = translated.replace('\u2018', "'").replace('\u2019', "'")
+            translated = translated.replace('\u201c', '"').replace('\u201d', '"').replace('\u2026', '...')
+
+            color_int = elem["color"]
+            color = (
+                ((color_int >> 16) & 0xFF) / 255.0,
+                ((color_int >> 8) & 0xFF) / 255.0,
+                (color_int & 0xFF) / 255.0
+            )
+
+            try:
+                rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
+                page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1))
+
+                # Determine rotation: 90 = bottom-to-top, 270 = top-to-bottom
+                angle = elem.get("rotation_angle", 90)
+                if angle > 0:
+                    rotate = 90
+                    insert_point = (bbox[0] + size * 0.8, bbox[3])
+                else:
+                    rotate = 270
+                    insert_point = (bbox[2] - size * 0.2, bbox[1])
+
+                page.insert_text(
+                    insert_point,
+                    translated,
+                    fontsize=size,
+                    color=color,
+                    rotate=rotate
+                )
+                success_count += 1
+            except Exception:
+                pass
 
         if page_num == 0:
             safe_print(f"   Replaced {success_count}/{len(page_elements)} texts on page 1")
