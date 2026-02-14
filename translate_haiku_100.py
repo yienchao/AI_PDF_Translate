@@ -253,8 +253,10 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
         page = doc[page_num]
         page_elements = [e for e in text_elements if e["page"] == page_num]
 
-        # Cover original text with white rectangles (minimal padding to avoid covering graphics)
+        # Cover original text with white rectangles (only for translated elements, leave skipped text untouched)
         for elem in page_elements:
+            if elem.get("type") == "skip":
+                continue
             bbox = elem["bbox"]
             rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
             page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1))
@@ -267,6 +269,8 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
 
         success_count = 0
         for elem in page_elements:
+            if elem.get("type") == "skip":
+                continue
             translated = elem.get("translated", elem["text"])
             bbox = elem["bbox"]
             size = elem["size"]
