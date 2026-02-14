@@ -769,12 +769,12 @@ with tab3:
 
                 for trans in translations:
                     date_str = trans['created_at'][:10]
-                    tokens = trans.get('total_tokens', 0)
-                    size_str = ""
-                    if trans.get('file_size_bytes'):
-                        size_mb = trans['file_size_bytes'] / 1024 / 1024
-                        size_str = f"  |  {size_mb:.2f} MB"
-                    st.markdown(f"**{date_str}**  |  {trans['original_filename']} → {trans['translated_filename']}  |  {tokens:,} tokens{size_str}")
+                    with st.expander(f"{date_str}  |  {trans['original_filename']}"):
+                        st.write(f"**Translated:** {trans['translated_filename']}")
+                        st.write(f"**Tokens:** {trans.get('total_tokens', 0):,}")
+                        if trans.get('file_size_bytes'):
+                            size_mb = trans['file_size_bytes'] / 1024 / 1024
+                            st.write(f"**File size:** {size_mb:.2f} MB")
             else:
                 st.info("No translation history yet")
 
