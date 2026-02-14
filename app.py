@@ -20,8 +20,8 @@ from anthropic_translator import translate_with_haiku
 from api_key_manager import get_key_manager
 
 # Configuration constants
-HAIKU_PRICE_INPUT_PER_1M = 0.80
-HAIKU_PRICE_OUTPUT_PER_1M = 4.00
+HAIKU_PRICE_INPUT_PER_1M = 1.00
+HAIKU_PRICE_OUTPUT_PER_1M = 5.00
 MAX_PARALLEL_TRANSLATIONS = 5  # Standard instance (2GB RAM)
 MAX_FILE_SIZE_MB = 50  # Maximum file size per PDF to prevent memory exhaustion
 MAX_TOTAL_UPLOAD_MB = 100  # Maximum total upload size per batch
@@ -241,8 +241,7 @@ def log_translation_to_database(supabase, user_id, file_info):
             translated_filename=file_info["translated_filename"],
             input_tokens=file_info["input_tokens"],
             output_tokens=file_info["output_tokens"],
-            file_size_bytes=file_info.get("file_size_bytes"),
-            status=file_info.get("status", "completed")
+            file_size_bytes=file_info.get("file_size_bytes")
         )
         return True
     except Exception as e:
@@ -515,8 +514,7 @@ with tab1:
                                         "translated_filename": final_output_name,
                                         "input_tokens": input_tokens,
                                         "output_tokens": output_tokens,
-                                        "file_size_bytes": file_size,
-                                        "status": "completed"
+                                        "file_size_bytes": file_size
                                     }
                                 )
                                 if logged is not True:
@@ -762,22 +760,13 @@ with tab3:
                 st.subheader("Recent Translations")
 
                 for trans in translations:
-                    with st.expander(f"📄 {trans['original_filename']} → {trans['translated_filename']}"):
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.markdown(f"**Date:** {trans['created_at'][:10]}")
-                            if trans.get('file_size_bytes'):
-                                size_mb = trans['file_size_bytes'] / 1024 / 1024
-                                st.markdown(f"**File Size:** {size_mb:.2f} MB")
-                            cost = (trans.get('cost_input_usd') or 0) + (trans.get('cost_output_usd') or 0)
-                            if cost > 0:
-                                st.markdown(f"**Cost:** ${cost:.4f}")
-
-                        with col2:
-                            st.markdown(f"**Tokens:** {trans.get('total_tokens', 0):,}")
-                            st.markdown(f"**Input:** {trans.get('input_tokens', 0):,}")
-                            st.markdown(f"**Output:** {trans.get('output_tokens', 0):,}")
+                    date_str = trans['created_at'][:10]
+                    tokens = trans.get('total_tokens', 0)
+                    size_str = ""
+                    if trans.get('file_size_bytes'):
+                        size_mb = trans['file_size_bytes'] / 1024 / 1024
+                        size_str = f"  |  {size_mb:.2f} MB"
+                    st.markdown(f"**{date_str}**  |  {trans['original_filename']} → {trans['translated_filename']}  |  {tokens:,} tokens{size_str}")
             else:
                 st.info("No translation history yet")
 
@@ -786,6 +775,3 @@ with tab3:
     else:
         st.info("History is unavailable - Supabase not configured")
 
-# Footer
-st.divider()
-st.markdown("*Production version with Supabase auth (local mode enabled if Supabase not configured)*")

@@ -67,22 +67,18 @@ class SupabaseHelper:
         translated_filename: str,
         input_tokens: int,
         output_tokens: int,
-        file_size_bytes: Optional[int] = None,
-        status: str = "completed",
-        error_message: Optional[str] = None
+        file_size_bytes: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Log a translation job to the database
 
         Args:
             user_id: UUID of the user
-            original_filename: Original French PDF filename
-            translated_filename: Translated English PDF filename
+            original_filename: Original PDF filename
+            translated_filename: Translated PDF filename
             input_tokens: Number of input tokens used
             output_tokens: Number of output tokens used
             file_size_bytes: Size of original file in bytes
-            status: Status of translation (processing, completed, failed)
-            error_message: Error message if failed
 
         Returns:
             Dict with the created translation record
@@ -103,8 +99,8 @@ class SupabaseHelper:
             data["file_size_bytes"] = file_size_bytes
 
         # Calculate costs
-        cost_input = (input_tokens / 1_000_000) * 0.80
-        cost_output = (output_tokens / 1_000_000) * 4.00
+        cost_input = (input_tokens / 1_000_000) * 1.00
+        cost_output = (output_tokens / 1_000_000) * 5.00
         data["cost_input_usd"] = round(cost_input, 6)
         data["cost_output_usd"] = round(cost_output, 6)
 

@@ -408,10 +408,10 @@ def main():
     else:
         time_str = f"{seconds:.1f}s"
 
-    # Calculate cost (Haiku 4.5 pricing: $0.80/1M input, $4.00/1M output)
+    # Calculate cost (Haiku 4.5 pricing: $1.00/1M input, $5.00/1M output)
     total_tokens = total_input_tokens + total_output_tokens
-    cost_input = (total_input_tokens / 1_000_000) * 0.80
-    cost_output = (total_output_tokens / 1_000_000) * 4.00
+    cost_input = (total_input_tokens / 1_000_000) * 1.00
+    cost_output = (total_output_tokens / 1_000_000) * 5.00
     total_cost = cost_input + cost_output
 
     print(f"\n{'='*80}")
