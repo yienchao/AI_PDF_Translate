@@ -101,6 +101,9 @@ def extract_text_from_pdf(pdf_path):
         for block in blocks:
             if block.get("type") == 0:
                 for line in block.get("lines", []):
+                    # Check text direction: (1,0)=horizontal, anything else=rotated
+                    line_dir = line.get("dir", (1, 0))
+                    is_rotated = abs(line_dir[0]) < 0.5  # Not horizontal
                     for span in line.get("spans", []):
                         text = span.get("text", "").strip()
                         if text:
@@ -108,7 +111,8 @@ def extract_text_from_pdf(pdf_path):
                                 "text": text,
                                 "bbox": list(span["bbox"]),
                                 "size": span["size"],
-                                "color": span.get("color", 0)
+                                "color": span.get("color", 0),
+                                "rotated": is_rotated
                             })
 
         merged = merge_text_spans(page_spans)
@@ -119,7 +123,8 @@ def extract_text_from_pdf(pdf_path):
                 "text": item["text"],
                 "bbox": item["bbox"],
                 "size": item["size"],
-                "color": item["color"]
+                "color": item["color"],
+                "rotated": item.get("rotated", False)
             })
 
     doc.close()
@@ -158,11 +163,17 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
     needs_translation = {}  # {index: french_text}
     skipped = 0
 
+    rotated_count = 0
     for idx, elem in enumerate(text_elements):
         text = elem["text"]
 
-        # Skip only numbers/units
-        if should_skip(text):
+        # Skip rotated/vertical text (can't redact rotated text properly)
+        if elem.get("rotated"):
+            elem["translated"] = text
+            elem["type"] = "skip"
+            rotated_count += 1
+        # Skip numbers/units
+        elif should_skip(text):
             elem["translated"] = text
             elem["type"] = "skip"
             skipped += 1
@@ -172,6 +183,7 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             needs_translation[str(idx)] = text
 
     safe_print(f"   Skipped (numbers/units): {skipped}")
+    safe_print(f"   Skipped (rotated text): {rotated_count}")
     safe_print(f"   Sending to Haiku: {len(needs_translation)}")
 
     # Translate with Haiku
@@ -291,7 +303,7 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
                     text=translated,
                     fontsize=size,
                     text_color=color,
-                    fill=(1, 1, 1)
+                    fill=False
                 )
                 success_count += 1
             except Exception:
