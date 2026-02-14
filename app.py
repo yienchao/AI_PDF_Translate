@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import threading
 
 # Load environment variables from .env file
@@ -434,10 +436,10 @@ with tab1:
                 # Estimate translation time
                 total_files = len(uploaded_files)
                 if total_files == 1:
-                    est_seconds = int(10 + (total_size_mb * 5))
+                    est_seconds = int(10 + (total_size_mb * 15))
                 else:
                     parallel = min(total_files, MAX_PARALLEL_TRANSLATIONS)
-                    est_seconds = int(10 + (total_size_mb * 5) / parallel * total_files / parallel)
+                    est_seconds = int(10 + (total_size_mb * 15) / parallel * total_files / parallel)
                 if est_seconds < 60:
                     est_str = f"~{est_seconds}s"
                 else:
@@ -768,7 +770,13 @@ with tab3:
                 st.subheader("Recent Translations")
 
                 for trans in translations:
-                    date_str = trans['created_at'][:10]
+                    # Convert UTC to Eastern Time (Montreal, handles DST)
+                    try:
+                        utc_dt = datetime.fromisoformat(trans['created_at'].replace('Z', '+00:00'))
+                        eastern_dt = utc_dt.astimezone(ZoneInfo("America/Montreal"))
+                        date_str = eastern_dt.strftime('%Y-%m-%d')
+                    except Exception:
+                        date_str = trans['created_at'][:10]
                     with st.expander(f"{date_str}  |  {trans['original_filename']}"):
                         st.write(f"**Translated:** {trans['translated_filename']}")
                         st.write(f"**Tokens:** {trans.get('total_tokens', 0):,}")
