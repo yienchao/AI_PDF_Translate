@@ -132,16 +132,17 @@ def safe_print(text):
     except:
         print(text)
 
-def process_pdf(input_path, output_path, api_key, source_lang="French", target_lang="English", progress_callback=None):
+def process_pdf(input_path, output_path, api_key, source_lang="French", target_lang="English", progress_callback=None, api_keys=None):
     """Process single PDF with 100% Haiku translation
 
     Args:
         input_path: Path to input PDF
         output_path: Path to save translated PDF
-        api_key: Anthropic API key
+        api_key: Anthropic API key (fallback if api_keys not provided)
         source_lang: Source language
         target_lang: Target language
         progress_callback: Optional callback function(progress_value) where progress_value is 0.0-1.0
+        api_keys: List of API keys to rotate across batches for parallel speed
     """
     safe_print(f"\n{'='*80}")
     safe_print(f"100% HAIKU TRANSLATION ({source_lang} -> {target_lang})")
@@ -195,7 +196,8 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
                 batch_size=100,
                 source_lang=source_lang,
                 target_lang=target_lang,
-                progress_callback=batch_progress
+                progress_callback=batch_progress,
+                api_keys=api_keys
             )
             translations = result["translations"]
             input_tokens = result["input_tokens"]

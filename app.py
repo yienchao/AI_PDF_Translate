@@ -112,14 +112,17 @@ def safe_print(text):
         print(text.encode('ascii', 'replace').decode('ascii'))
 
 def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lang,
-                       translated_filenames, UPLOAD_DIR, OUTPUT_DIR):
+                       translated_filenames, UPLOAD_DIR, OUTPUT_DIR, all_api_keys=None):
     """Process a single PDF file (used for parallel execution).
 
     Returns:
-        tuple: (idx, success, input_tokens, output_tokens, translated_filename, error_msg, api_key_used)
+        tuple: (idx, success, input_tokens, output_tokens, translated_filename, error_msg, api_key_used, duration_seconds)
     """
     import shutil
     import gc
+    import time as _time
+
+    file_start = _time.time()
 
     # Get API key from rotation manager
     api_key = key_manager.get_next_key()
@@ -136,14 +139,15 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
 
         output_path = OUTPUT_DIR / f"temp_output_{idx}.pdf"
 
-        # Translate PDF content
+        # Translate PDF content (pass all keys for parallel batch rotation)
         success, input_tokens, output_tokens = process_pdf(
             str(input_path),
             str(output_path),
             api_key,
             source_lang=source_lang,
             target_lang=target_lang,
-            progress_callback=None  # No per-file progress in parallel mode
+            progress_callback=None,  # No per-file progress in parallel mode
+            api_keys=all_api_keys
         )
 
         # Record token usage
@@ -163,13 +167,15 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
             shutil.move(str(output_path), str(final_output_path))
             output_path = None  # Already moved, don't delete
 
-            return (idx, True, input_tokens, output_tokens, final_output_name, None, api_key_id)
+            duration = _time.time() - file_start
+            return (idx, True, input_tokens, output_tokens, final_output_name, None, api_key_id, duration)
         else:
             key_manager.mark_error(api_key)
             # Log detailed error
             import sys
             safe_print(f"[ERROR] Translation failed for {uploaded_file.name} with api_key_id={api_key_id}")
-            return (idx, False, 0, 0, None, "Translation failed - check console for details", api_key_id)
+            duration = _time.time() - file_start
+            return (idx, False, 0, 0, None, "Translation failed - check console for details", api_key_id, duration)
 
     except Exception as e:
         # Check if it's a rate limit error
@@ -183,7 +189,8 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
         else:
             key_manager.mark_error(api_key)
             error_msg = str(e)
-        return (idx, False, 0, 0, None, error_msg, api_key_id)
+        duration = _time.time() - file_start
+        return (idx, False, 0, 0, None, error_msg, api_key_id, duration)
 
     finally:
         # MEMORY OPTIMIZATION: Clean up temp files and force garbage collection
@@ -243,7 +250,8 @@ def log_translation_to_database(supabase, user_id, file_info):
             translated_filename=file_info["translated_filename"],
             input_tokens=file_info["input_tokens"],
             output_tokens=file_info["output_tokens"],
-            file_size_bytes=file_info.get("file_size_bytes")
+            file_size_bytes=file_info.get("file_size_bytes"),
+            duration_seconds=file_info.get("duration_seconds")
         )
         return True
     except Exception as e:
@@ -436,10 +444,10 @@ with tab1:
                 # Estimate translation time
                 total_files = len(uploaded_files)
                 if total_files == 1:
-                    est_seconds = int(10 + (total_size_mb * 15))
+                    est_seconds = int(20 + (total_size_mb * 80))
                 else:
                     parallel = min(total_files, MAX_PARALLEL_TRANSLATIONS)
-                    est_seconds = int(10 + (total_size_mb * 15) / parallel * total_files / parallel)
+                    est_seconds = int(20 + (total_size_mb * 80) / parallel * total_files / parallel)
                 if est_seconds < 60:
                     est_str = f"~{est_seconds}s"
                 else:
@@ -528,7 +536,7 @@ with tab1:
                             progress_bar.empty()
                             st.stop()
 
-                        def log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id):
+                        def log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id, duration_seconds=None):
                             """Log a completed file to DB and show success message."""
                             if st.session_state.get("supabase"):
                                 file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
@@ -540,7 +548,8 @@ with tab1:
                                         "translated_filename": final_output_name,
                                         "input_tokens": input_tokens,
                                         "output_tokens": output_tokens,
-                                        "file_size_bytes": file_size
+                                        "file_size_bytes": file_size,
+                                        "duration_seconds": duration_seconds
                                     }
                                 )
                                 if logged is not True:
@@ -577,6 +586,8 @@ with tab1:
                                 status_text.text(f"Translating {uploaded_file.name}... {pct}%")
                                 timer_text.text(f"Elapsed: {elapsed:.1f}s")
 
+                            all_keys = list(key_manager.key_usage.keys())
+
                             try:
                                 success, input_tokens, output_tokens = process_pdf(
                                     str(input_path),
@@ -584,7 +595,8 @@ with tab1:
                                     api_key,
                                     source_lang=source_lang,
                                     target_lang=target_lang,
-                                    progress_callback=update_progress
+                                    progress_callback=update_progress,
+                                    api_keys=all_keys
                                 )
 
                                 if success:
@@ -601,7 +613,8 @@ with tab1:
                                     final_output_path = OUTPUT_DIR / final_output_name
                                     shutil_single.move(str(output_path), str(final_output_path))
 
-                                    log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id)
+                                    file_duration = time.time() - start_time
+                                    log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id, duration_seconds=file_duration)
                                 else:
                                     key_manager.mark_error(api_key)
                                     st.error(f"{uploaded_file.name}: Translation failed [{api_key_id}]")
@@ -624,6 +637,8 @@ with tab1:
 
                             completed_lock = threading.Lock()
 
+                            all_keys = list(key_manager.key_usage.keys())
+
                             with ThreadPoolExecutor(max_workers=MAX_PARALLEL_TRANSLATIONS) as executor:
                                 future_to_file = {
                                     executor.submit(
@@ -635,7 +650,8 @@ with tab1:
                                         target_lang,
                                         translated_filenames,
                                         UPLOAD_DIR,
-                                        OUTPUT_DIR
+                                        OUTPUT_DIR,
+                                        all_keys
                                     ): (idx, uploaded_file) for idx, uploaded_file in enumerate(uploaded_files)
                                 }
 
@@ -643,7 +659,7 @@ with tab1:
                                     idx, uploaded_file = future_to_file[future]
 
                                     try:
-                                        file_idx, success, input_tokens, output_tokens, final_output_name, error_msg, api_key_id = future.result()
+                                        file_idx, success, input_tokens, output_tokens, final_output_name, error_msg, api_key_id, file_duration = future.result()
 
                                         if success:
                                             with completed_lock:
@@ -651,7 +667,7 @@ with tab1:
                                                 total_input_tokens += input_tokens
                                                 total_output_tokens += output_tokens
 
-                                            log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id)
+                                            log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id, duration_seconds=file_duration)
                                         else:
                                             st.error(f"{uploaded_file.name}: {error_msg} [{api_key_id}]")
 
@@ -783,6 +799,12 @@ with tab3:
                         if trans.get('file_size_bytes'):
                             size_mb = trans['file_size_bytes'] / 1024 / 1024
                             st.write(f"**File size:** {size_mb:.2f} MB")
+                        if trans.get('duration_seconds'):
+                            dur = trans['duration_seconds']
+                            if dur >= 60:
+                                st.write(f"**Time:** {int(dur // 60)}m {int(dur % 60)}s")
+                            else:
+                                st.write(f"**Time:** {dur:.1f}s")
             else:
                 st.info("No translation history yet")
 

@@ -67,7 +67,8 @@ class SupabaseHelper:
         translated_filename: str,
         input_tokens: int,
         output_tokens: int,
-        file_size_bytes: Optional[int] = None
+        file_size_bytes: Optional[int] = None,
+        duration_seconds: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Log a translation job to the database
@@ -79,6 +80,7 @@ class SupabaseHelper:
             input_tokens: Number of input tokens used
             output_tokens: Number of output tokens used
             file_size_bytes: Size of original file in bytes
+            duration_seconds: Time taken to translate in seconds
 
         Returns:
             Dict with the created translation record
@@ -97,6 +99,9 @@ class SupabaseHelper:
 
         if file_size_bytes is not None:
             data["file_size_bytes"] = file_size_bytes
+
+        if duration_seconds is not None:
+            data["duration_seconds"] = round(duration_seconds, 1)
 
         # Calculate costs
         cost_input = (input_tokens / 1_000_000) * 1.00

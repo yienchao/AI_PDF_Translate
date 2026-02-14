@@ -116,26 +116,29 @@ Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON
         raise ValueError(f"Failed to parse API response as JSON: {e}\n\nResponse:\n{response_text}")
 
 
-PARALLEL_API_BATCHES = 3  # Number of concurrent API calls per file
+PARALLEL_API_BATCHES = 5  # Number of concurrent API calls per file
 
 
-def translate_batch(texts: dict, api_key: str, batch_size: int = HAIKU_DEFAULT_BATCH_SIZE, source_lang: str = "French", target_lang: str = "English", progress_callback=None, max_tokens_per_batch: int = HAIKU_MAX_TOKENS_PER_BATCH) -> dict:
+def translate_batch(texts: dict, api_key: str = None, batch_size: int = HAIKU_DEFAULT_BATCH_SIZE, source_lang: str = "French", target_lang: str = "English", progress_callback=None, max_tokens_per_batch: int = HAIKU_MAX_TOKENS_PER_BATCH, api_keys: list = None) -> dict:
     """
     Translate texts in batches to avoid token limits.
     Batches are processed in parallel for speed.
 
     Args:
         texts: Dict of {index: text_to_translate}
-        api_key: Anthropic API key
+        api_key: Single Anthropic API key (fallback if api_keys not provided)
         batch_size: Maximum number of texts per API call (overridden by token limit)
         source_lang: Source language
         target_lang: Target language
         progress_callback: Optional callback function(current, total) for progress updates
         max_tokens_per_batch: Maximum estimated tokens per batch (default 15000, safe for 200K context)
+        api_keys: List of API keys to rotate across batches (uses all keys in parallel)
 
     Returns:
         Dict with "translations" and token usage stats
     """
+    # Build key list: prefer api_keys param, fall back to single api_key
+    keys = api_keys if api_keys else [api_key]
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import threading
 
@@ -173,24 +176,24 @@ def translate_batch(texts: dict, api_key: str, batch_size: int = HAIKU_DEFAULT_B
     if total_batches <= 1:
         # Single batch - no need for threading overhead
         for batch_num, batch in enumerate(batches, 1):
-            result = translate_with_haiku(batch, api_key, source_lang=source_lang, target_lang=target_lang)
+            result = translate_with_haiku(batch, keys[0], source_lang=source_lang, target_lang=target_lang)
             all_translations.update(result["translations"])
             total_input_tokens += result["input_tokens"]
             total_output_tokens += result["output_tokens"]
             if progress_callback:
                 progress_callback(batch_num, total_batches)
     else:
-        # Multiple batches - process in parallel
+        # Multiple batches - process in parallel, rotating keys
         completed_count = 0
         results_lock = threading.Lock()
 
         def process_batch(batch_info):
-            batch_num, batch = batch_info
-            return batch_num, translate_with_haiku(batch, api_key, source_lang=source_lang, target_lang=target_lang)
+            batch_num, batch, key = batch_info
+            return batch_num, translate_with_haiku(batch, key, source_lang=source_lang, target_lang=target_lang)
 
         with ThreadPoolExecutor(max_workers=PARALLEL_API_BATCHES) as executor:
             futures = {
-                executor.submit(process_batch, (i, batch)): i
+                executor.submit(process_batch, (i, batch, keys[(i - 1) % len(keys)])): i
                 for i, batch in enumerate(batches, 1)
             }
 
