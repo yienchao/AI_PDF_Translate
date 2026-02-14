@@ -497,82 +497,150 @@ with tab1:
                         if filename_result["input_tokens"] > 0:
                             key_manager.record_tokens(filename_api_key, filename_result["input_tokens"] + filename_result["output_tokens"])
 
-                        # Step 2: Process files in parallel (skip if filename translation already failed)
+                        # Step 2: Process files (skip if filename translation already failed)
                         if translation_failed:
                             status_text.text("")
                             progress_bar.empty()
                             st.stop()
 
-                        status_text.text(f"Translating PDFs in parallel (up to {MAX_PARALLEL_TRANSLATIONS} at once)...")
-                        progress_bar.progress(0.1)
+                        def log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id):
+                            """Log a completed file to DB and show success message."""
+                            if st.session_state.get("supabase"):
+                                file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
+                                logged = log_translation_to_database(
+                                    st.session_state.supabase,
+                                    get_user_id(),
+                                    {
+                                        "original_filename": uploaded_file.name,
+                                        "translated_filename": final_output_name,
+                                        "input_tokens": input_tokens,
+                                        "output_tokens": output_tokens,
+                                        "file_size_bytes": file_size,
+                                        "status": "completed"
+                                    }
+                                )
+                                if logged is not True:
+                                    st.warning(f"{uploaded_file.name}: DB log failed: {logged}")
 
-                        # Shared state for progress tracking
-                        completed_lock = threading.Lock()
+                            file_tokens = input_tokens + output_tokens
+                            st.success(f"{uploaded_file.name}: {file_tokens:,} tokens [{api_key_id}]")
 
-                        # Use ThreadPoolExecutor for parallel processing
-                        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_TRANSLATIONS) as executor:
-                            # Submit all translation tasks
-                            future_to_file = {
-                                executor.submit(
-                                    process_single_file,
-                                    idx,
-                                    uploaded_file,
-                                    key_manager,
-                                    source_lang,
-                                    target_lang,
-                                    translated_filenames,
-                                    UPLOAD_DIR,
-                                    OUTPUT_DIR
-                                ): (idx, uploaded_file) for idx, uploaded_file in enumerate(uploaded_files)
-                            }
+                        if total_files == 1:
+                            # SINGLE FILE: Run sequentially with live per-page progress
+                            import shutil as shutil_single
+                            import gc
 
-                            # Process completed tasks as they finish
-                            for future in as_completed(future_to_file):
-                                idx, uploaded_file = future_to_file[future]
+                            uploaded_file = uploaded_files[0]
+                            api_key = key_manager.get_next_key()
+                            api_key_id = f"key_{list(key_manager.key_usage.keys()).index(api_key) + 1}"
 
-                                try:
-                                    file_idx, success, input_tokens, output_tokens, final_output_name, error_msg, api_key_id = future.result()
+                            status_text.text(f"Translating {uploaded_file.name}...")
+                            progress_bar.progress(0.1)
 
-                                    if success:
-                                        with completed_lock:
-                                            completed += 1
-                                            total_input_tokens += input_tokens
-                                            total_output_tokens += output_tokens
+                            # Save uploaded file
+                            input_path = UPLOAD_DIR / "temp_input_0.pdf"
+                            with open(input_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+                            output_path = OUTPUT_DIR / "temp_output_0.pdf"
 
-                                        # Log to database if Supabase is configured
-                                        if st.session_state.get("supabase"):
-                                            file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else None
-                                            logged = log_translation_to_database(
-                                                st.session_state.supabase,
-                                                get_user_id(),
-                                                {
-                                                    "original_filename": uploaded_file.name,
-                                                    "translated_filename": final_output_name,
-                                                    "input_tokens": input_tokens,
-                                                    "output_tokens": output_tokens,
-                                                    "file_size_bytes": file_size,
-                                                    "status": "completed"
-                                                }
-                                            )
-                                            if logged is not True:
-                                                st.warning(f"{uploaded_file.name}: DB log failed: {logged}")
-
-                                        # Show tokens for this file with API key used
-                                        file_tokens = input_tokens + output_tokens
-                                        st.success(f"{uploaded_file.name}: {file_tokens:,} tokens [{api_key_id}]")
-                                    else:
-                                        st.error(f"{uploaded_file.name}: {error_msg} [{api_key_id}]")
-
-                                except Exception as e:
-                                    st.error(f"Failed to translate {uploaded_file.name}: {e}")
-
-                                # Update progress bar and timer after each file completes
-                                with completed_lock:
-                                    current_completed = completed
+                            # Progress callback that updates UI in real-time
+                            def update_progress(progress_value):
+                                # Map 0.0-1.0 to 0.1-0.95 on the progress bar
+                                bar_value = 0.1 + (progress_value * 0.85)
+                                progress_bar.progress(min(bar_value, 0.95))
                                 elapsed = time.time() - start_time
-                                progress_bar.progress(0.1 + (current_completed / total_files) * 0.9)
-                                status_text.text(f"Translating ({current_completed}/{total_files} complete)...")
+                                pct = int(progress_value * 100)
+                                status_text.text(f"Translating {uploaded_file.name}... {pct}%")
                                 timer_text.text(f"Elapsed: {elapsed:.1f}s")
+
+                            try:
+                                success, input_tokens, output_tokens = process_pdf(
+                                    str(input_path),
+                                    str(output_path),
+                                    api_key,
+                                    source_lang=source_lang,
+                                    target_lang=target_lang,
+                                    progress_callback=update_progress
+                                )
+
+                                if success:
+                                    key_manager.record_tokens(api_key, input_tokens + output_tokens)
+                                    completed += 1
+                                    total_input_tokens += input_tokens
+                                    total_output_tokens += output_tokens
+
+                                    # Move to final location
+                                    file_key = "file_0"
+                                    translated_name = translated_filenames.get(
+                                        file_key, uploaded_file.name.replace('.pdf', ''))
+                                    final_output_name = f"{translated_name}.pdf"
+                                    final_output_path = OUTPUT_DIR / final_output_name
+                                    shutil_single.move(str(output_path), str(final_output_path))
+
+                                    log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id)
+                                else:
+                                    key_manager.mark_error(api_key)
+                                    st.error(f"{uploaded_file.name}: Translation failed [{api_key_id}]")
+
+                            except Exception as e:
+                                st.error(f"Failed to translate {uploaded_file.name}: {e}")
+                            finally:
+                                # Cleanup
+                                try:
+                                    if input_path.exists():
+                                        input_path.unlink()
+                                except Exception:
+                                    pass
+                                gc.collect()
+
+                        else:
+                            # MULTIPLE FILES: Process in parallel
+                            status_text.text(f"Translating {total_files} PDFs in parallel (up to {MAX_PARALLEL_TRANSLATIONS} at once)...")
+                            progress_bar.progress(0.1)
+
+                            completed_lock = threading.Lock()
+
+                            with ThreadPoolExecutor(max_workers=MAX_PARALLEL_TRANSLATIONS) as executor:
+                                future_to_file = {
+                                    executor.submit(
+                                        process_single_file,
+                                        idx,
+                                        uploaded_file,
+                                        key_manager,
+                                        source_lang,
+                                        target_lang,
+                                        translated_filenames,
+                                        UPLOAD_DIR,
+                                        OUTPUT_DIR
+                                    ): (idx, uploaded_file) for idx, uploaded_file in enumerate(uploaded_files)
+                                }
+
+                                for future in as_completed(future_to_file):
+                                    idx, uploaded_file = future_to_file[future]
+
+                                    try:
+                                        file_idx, success, input_tokens, output_tokens, final_output_name, error_msg, api_key_id = future.result()
+
+                                        if success:
+                                            with completed_lock:
+                                                completed += 1
+                                                total_input_tokens += input_tokens
+                                                total_output_tokens += output_tokens
+
+                                            log_completed_file(uploaded_file, final_output_name, input_tokens, output_tokens, api_key_id)
+                                        else:
+                                            st.error(f"{uploaded_file.name}: {error_msg} [{api_key_id}]")
+
+                                    except Exception as e:
+                                        st.error(f"Failed to translate {uploaded_file.name}: {e}")
+
+                                    # Update progress after each file completes
+                                    with completed_lock:
+                                        current_completed = completed
+                                    elapsed = time.time() - start_time
+                                    progress_bar.progress(0.1 + (current_completed / total_files) * 0.9)
+                                    status_text.text(f"Translating ({current_completed}/{total_files} files complete)...")
+                                    timer_text.text(f"Elapsed: {elapsed:.1f}s")
 
                         # Final time
                         total_time = time.time() - start_time
@@ -699,10 +767,12 @@ with tab3:
 
                         with col1:
                             st.markdown(f"**Date:** {trans['created_at'][:10]}")
-                            st.markdown(f"**Status:** {trans['status']}")
                             if trans.get('file_size_bytes'):
                                 size_mb = trans['file_size_bytes'] / 1024 / 1024
                                 st.markdown(f"**File Size:** {size_mb:.2f} MB")
+                            cost = (trans.get('cost_input_usd') or 0) + (trans.get('cost_output_usd') or 0)
+                            if cost > 0:
+                                st.markdown(f"**Cost:** ${cost:.4f}")
 
                         with col2:
                             st.markdown(f"**Tokens:** {trans.get('total_tokens', 0):,}")
