@@ -284,22 +284,12 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             )
 
             try:
-                # Fit text: reduce font size if needed
-                current_size = size
-                available_width = bbox[2] - bbox[0]
-                min_size = size * 0.5
-
-                while current_size >= min_size:
-                    estimated_width = len(translated) * current_size * 0.5
-                    if estimated_width <= available_width:
-                        break
-                    current_size *= 0.9
-
+                # Use original font size - redaction will handle fitting
                 rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
                 page.add_redact_annot(
                     rect,
                     text=translated,
-                    fontsize=current_size,
+                    fontsize=size,
                     text_color=color,
                     fill=(1, 1, 1)
                 )
