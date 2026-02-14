@@ -247,7 +247,7 @@ def log_translation_to_database(supabase, user_id, file_info):
         return True
     except Exception as e:
         safe_print(f"Database logging failed: {e}")
-        return False
+        return str(e)
 
 # Configure page
 st.set_page_config(
@@ -554,8 +554,8 @@ with tab1:
                                                     "status": "completed"
                                                 }
                                             )
-                                            if not logged:
-                                                st.warning(f"{uploaded_file.name}: Translation completed but history wasn't saved")
+                                            if logged is not True:
+                                                st.warning(f"{uploaded_file.name}: DB log failed: {logged}")
 
                                         # Show tokens for this file with API key used
                                         file_tokens = input_tokens + output_tokens
