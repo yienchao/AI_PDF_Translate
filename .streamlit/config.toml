@@ -4,3 +4,5 @@ enableXsrfProtection = false
 enableCORS = false
 headless = true
 maxUploadSize = 50
+maxMessageSize = 200
+enableWebsocketCompression = false
