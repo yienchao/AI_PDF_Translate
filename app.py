@@ -29,7 +29,7 @@ MAX_FILE_SIZE_MB = 50  # Maximum file size per PDF to prevent memory exhaustion
 MAX_TOTAL_UPLOAD_MB = 100  # Maximum total upload size per batch
 MAX_OUTPUT_FILES = 20  # Maximum number of output files to keep per user (cleanup oldest)
 LOCK_FILE = Path("translation_lock.txt")
-LOCK_TIMEOUT_SECONDS = 300  # 5 minutes - assume stuck if older than this
+LOCK_TIMEOUT_SECONDS = 1800  # 30 minutes - assume stuck if older than this
 
 # Helper functions
 def acquire_translation_lock(user_id):
@@ -60,10 +60,20 @@ def release_translation_lock():
         pass
 
 def get_lock_status():
-    """Get current lock status. Returns (is_locked, user_id, seconds_elapsed)."""
+    """Get current lock status. Returns (is_locked, user_id, seconds_elapsed).
+    Auto-clears stale locks older than LOCK_TIMEOUT_SECONDS."""
     import time
     try:
         if LOCK_FILE.exists():
+            # Auto-clear stale locks (same check as acquire_translation_lock)
+            lock_age = time.time() - LOCK_FILE.stat().st_mtime
+            if lock_age > LOCK_TIMEOUT_SECONDS:
+                try:
+                    LOCK_FILE.unlink()
+                except Exception:
+                    pass
+                return False, None, 0
+
             content = LOCK_FILE.read_text()
             parts = content.split(":")
             if len(parts) == 2:
@@ -435,7 +445,7 @@ with tab1:
 
             # Check if another user is translating
             is_locked, lock_user, lock_elapsed = get_lock_status()
-            if is_locked and lock_user != user_id:
+            if is_locked and lock_user != str(user_id):
                 st.warning(f"Another translation is in progress ({int(lock_elapsed)}s elapsed). Please wait...")
                 st.info("The page will auto-refresh when ready. Or click below to check status.")
                 if st.button("Check Status"):
@@ -618,9 +628,13 @@ with tab1:
                                 else:
                                     key_manager.mark_error(api_key)
                                     st.error(f"{uploaded_file.name}: Translation failed [{api_key_id}]")
+                                    release_translation_lock()
+                                    st.session_state.is_translating = False
 
                             except Exception as e:
                                 st.error(f"Failed to translate {uploaded_file.name}: {e}")
+                                release_translation_lock()
+                                st.session_state.is_translating = False
                             finally:
                                 # Cleanup
                                 try:
