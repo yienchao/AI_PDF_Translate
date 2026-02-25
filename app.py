@@ -2,6 +2,7 @@
 import streamlit as st
 import os
 import sys
+import psutil
 from pathlib import Path
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,9 +25,9 @@ from api_key_manager import get_key_manager
 # Configuration constants
 HAIKU_PRICE_INPUT_PER_1M = 1.00
 HAIKU_PRICE_OUTPUT_PER_1M = 5.00
-MAX_PARALLEL_TRANSLATIONS = 5  # Standard instance (2GB RAM)
-MAX_FILE_SIZE_MB = 50  # Maximum file size per PDF to prevent memory exhaustion
-MAX_TOTAL_UPLOAD_MB = 100  # Maximum total upload size per batch
+MAX_PARALLEL_TRANSLATIONS = 3  # Reduced from 5 to lower peak memory usage
+MAX_FILE_SIZE_MB = 30  # Maximum file size per PDF to prevent memory exhaustion
+MAX_TOTAL_UPLOAD_MB = 60  # Maximum total upload size per batch
 MAX_OUTPUT_FILES = 20  # Maximum number of output files to keep per user (cleanup oldest)
 LOCK_FILE = Path("translation_lock.txt")
 LOCK_TIMEOUT_SECONDS = 1800  # 30 minutes - assume stuck if older than this
@@ -113,6 +114,34 @@ def sanitize_filename(filename):
         filename = filename.replace(char, '_')
     return filename
 
+def log_memory(label=""):
+    """Log current process memory usage to help diagnose OOM issues on Render."""
+    try:
+        process = psutil.Process()
+        rss_mb = process.memory_info().rss / (1024 * 1024)
+        safe_print(f"[MEMORY] {label}: {rss_mb:.1f} MB RSS")
+    except Exception:
+        pass
+
+def cleanup_stale_temp_files(base_dir, max_age_hours=2):
+    """Remove old temp_input_*.pdf files from all user upload directories."""
+    import time as _time
+    try:
+        user_files_dir = Path(base_dir)
+        if not user_files_dir.exists():
+            return
+        for uploads_dir in user_files_dir.glob("*/uploads"):
+            for temp_file in uploads_dir.glob("temp_input_*.pdf"):
+                try:
+                    age_hours = (_time.time() - temp_file.stat().st_mtime) / 3600
+                    if age_hours > max_age_hours:
+                        temp_file.unlink()
+                        safe_print(f"[CLEANUP] Deleted stale temp file: {temp_file}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 def safe_print(text):
     """Safely print text with Unicode characters on Windows console"""
     try:
@@ -148,6 +177,8 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
             f.write(uploaded_file.getbuffer())
 
         output_path = OUTPUT_DIR / f"temp_output_{idx}.pdf"
+
+        log_memory(f"Before process_pdf file_{idx}")
 
         # Translate PDF content (pass all keys for parallel batch rotation)
         success, input_tokens, output_tokens = process_pdf(
@@ -296,6 +327,8 @@ if user_id:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     # MEMORY OPTIMIZATION: Clean up old output files to prevent disk bloat
     cleanup_old_output_files(OUTPUT_DIR)
+    # Clean up stale temp files from all user directories
+    cleanup_stale_temp_files("user_files")
 else:
     # Local testing mode - use shared folder
     UPLOAD_DIR = Path("uploads")
@@ -304,6 +337,9 @@ else:
     OUTPUT_DIR.mkdir(exist_ok=True)
     # MEMORY OPTIMIZATION: Clean up old output files to prevent disk bloat
     cleanup_old_output_files(OUTPUT_DIR)
+
+# Log memory at startup
+log_memory("App startup")
 
 # Title
 st.title("AI PDF Translator")
@@ -497,6 +533,7 @@ with tab1:
                             st.session_state.is_translating = False
                             st.stop()
 
+                        log_memory("Before translation batch")
                         start_time = time.time()
                         progress_bar = st.progress(0)
                         status_text = st.empty()
@@ -697,6 +734,7 @@ with tab1:
                                     timer_text.text(f"Elapsed: {elapsed:.1f}s")
 
                         # Final time
+                        log_memory("After translation batch")
                         total_time = time.time() - start_time
                         minutes = int(total_time // 60)
                         seconds = total_time % 60

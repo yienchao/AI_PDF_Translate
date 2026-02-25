@@ -116,7 +116,7 @@ Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON
         raise ValueError(f"Failed to parse API response as JSON: {e}\n\nResponse:\n{response_text}")
 
 
-PARALLEL_API_BATCHES = 5  # Number of concurrent API calls per file
+PARALLEL_API_BATCHES = 3  # Reduced from 5 to lower peak memory usage
 
 
 def translate_batch(texts: dict, api_key: str = None, batch_size: int = HAIKU_DEFAULT_BATCH_SIZE, source_lang: str = "French", target_lang: str = "English", progress_callback=None, max_tokens_per_batch: int = HAIKU_MAX_TOKENS_PER_BATCH, api_keys: list = None) -> dict:

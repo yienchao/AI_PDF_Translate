@@ -133,6 +133,9 @@ class APIKeyManager:
         with self.lock:
             if api_key in self.key_usage:
                 self.key_usage[api_key]["tokens"] += tokens
+                # Auto-reset counters if they grow too large to prevent unbounded memory growth
+                if self.key_usage[api_key]["tokens"] > 100_000_000:
+                    self._reset_counters_unlocked()
 
     def get_stats(self) -> dict:
         """
@@ -159,6 +162,14 @@ class APIKeyManager:
     def get_total_keys(self) -> int:
         """Get total number of API keys"""
         return len(self.api_keys)
+
+    def _reset_counters_unlocked(self):
+        """Reset accumulated counters to prevent unbounded growth. Must be called with lock held."""
+        for key in self.key_usage:
+            self.key_usage[key]["requests"] = 0
+            self.key_usage[key]["tokens"] = 0
+            self.key_usage[key]["errors"] = 0
+        print("[INFO] API key manager counters reset to prevent memory growth")
 
 
 # Global instance (singleton pattern)
