@@ -162,6 +162,8 @@ def extract_text_from_pdf(pdf_path):
             })
 
     doc.close()
+    # Release MuPDF's internal glyph/image cache to reclaim native memory
+    fitz.TOOLS.store_shrink(100)
     return all_text
 
 def safe_print(text):
@@ -395,6 +397,8 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
     # Save PDF
     doc.save(output_path, garbage=4, deflate=True, clean=True)
     doc.close()
+    # Release MuPDF's internal glyph/image cache to reclaim native memory
+    fitz.TOOLS.store_shrink(100)
 
     # MEMORY OPTIMIZATION: Clear text_elements and force garbage collection
     text_elements.clear()

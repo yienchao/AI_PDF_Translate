@@ -114,11 +114,17 @@ def sanitize_filename(filename):
         filename = filename.replace(char, '_')
     return filename
 
+def get_rss_mb():
+    """Get current process RSS in MB."""
+    try:
+        return psutil.Process().memory_info().rss / (1024 * 1024)
+    except Exception:
+        return 0.0
+
 def log_memory(label=""):
     """Log current process memory usage to help diagnose OOM issues on Render."""
     try:
-        process = psutil.Process()
-        rss_mb = process.memory_info().rss / (1024 * 1024)
+        rss_mb = get_rss_mb()
         safe_print(f"[MEMORY] {label}: {rss_mb:.1f} MB RSS")
     except Exception:
         pass
@@ -245,8 +251,14 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
                 output_path.unlink()
         except Exception:
             pass
-        # Force garbage collection to free PyMuPDF memory
+        # Release MuPDF's internal cache and force garbage collection
+        try:
+            import fitz
+            fitz.TOOLS.store_shrink(100)
+        except Exception:
+            pass
         gc.collect()
+        log_memory(f"After process_pdf file_{idx}")
 
 def translate_filenames_batch(filenames, api_key, source_lang, target_lang):
     """Translate multiple filenames in a single API call.
@@ -338,8 +350,10 @@ else:
     # MEMORY OPTIMIZATION: Clean up old output files to prevent disk bloat
     cleanup_old_output_files(OUTPUT_DIR)
 
-# Log memory at startup
-log_memory("App startup")
+# Log memory only on actual first load (not every Streamlit rerun)
+if "app_started" not in st.session_state:
+    st.session_state.app_started = True
+    log_memory("App startup")
 
 # Title
 st.title("AI PDF Translator")
@@ -682,15 +696,22 @@ with tab1:
                                 gc.collect()
 
                         else:
-                            # MULTIPLE FILES: Process in parallel
-                            status_text.text(f"Translating {total_files} PDFs in parallel (up to {MAX_PARALLEL_TRANSLATIONS} at once)...")
+                            # MULTIPLE FILES: Process in parallel (or sequential if memory is high)
+                            current_rss = get_rss_mb()
+                            MEMORY_THRESHOLD_MB = 800  # Fall back to sequential above this
+                            if current_rss > MEMORY_THRESHOLD_MB:
+                                safe_print(f"[MEMORY] RSS={current_rss:.0f}MB > {MEMORY_THRESHOLD_MB}MB threshold, using sequential processing")
+                                effective_workers = 1
+                            else:
+                                effective_workers = MAX_PARALLEL_TRANSLATIONS
+                            status_text.text(f"Translating {total_files} PDFs {'sequentially (memory saving)' if effective_workers == 1 else f'in parallel (up to {effective_workers} at once)'}...")
                             progress_bar.progress(0.1)
 
                             completed_lock = threading.Lock()
 
                             all_keys = list(key_manager.key_usage.keys())
 
-                            with ThreadPoolExecutor(max_workers=MAX_PARALLEL_TRANSLATIONS) as executor:
+                            with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                                 future_to_file = {
                                     executor.submit(
                                         process_single_file,
