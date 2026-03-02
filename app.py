@@ -165,10 +165,10 @@ def cleanup_stale_temp_files(base_dir, max_age_hours=2):
 def safe_print(text):
     """Safely print text with Unicode characters on Windows console"""
     try:
-        print(text)
+        print(text, flush=True)
     except UnicodeEncodeError:
         # Fallback: replace problematic characters for Windows console
-        print(text.encode('ascii', 'replace').decode('ascii'))
+        print(text.encode('ascii', 'replace').decode('ascii'), flush=True)
 
 def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lang,
                        translated_filenames, UPLOAD_DIR, OUTPUT_DIR, all_api_keys=None):

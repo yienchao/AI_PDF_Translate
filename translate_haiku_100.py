@@ -169,9 +169,9 @@ def extract_text_from_pdf(pdf_path):
 def safe_print(text):
     """Safely print text with Unicode characters on Windows console"""
     try:
-        print(text.encode('ascii', 'replace').decode('ascii'))
+        print(text.encode('ascii', 'replace').decode('ascii'), flush=True)
     except:
-        print(text)
+        print(text, flush=True)
 
 def process_pdf(input_path, output_path, api_key, source_lang="French", target_lang="English", progress_callback=None, api_keys=None):
     """Process single PDF with 100% Haiku translation
@@ -192,7 +192,13 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
 
     # Extract text
     safe_print("Extracting text...")
-    text_elements = extract_text_from_pdf(input_path)
+    try:
+        text_elements = extract_text_from_pdf(input_path)
+    except Exception as e:
+        import traceback
+        safe_print(f"   EXTRACTION FAILED: {e}")
+        safe_print(f"   {traceback.format_exc()}")
+        return False, 0, 0
     safe_print(f"   Found {len(text_elements)} text elements")
 
     # Process each element - EVERYTHING goes to Haiku (no dictionary!)
