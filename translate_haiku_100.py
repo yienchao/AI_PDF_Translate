@@ -7,6 +7,7 @@
 """
 import fitz
 import gc
+import math
 import os
 import re
 import sys
@@ -125,7 +126,6 @@ def extract_text_from_pdf(pdf_path):
                                 line_color = span.get("color", 0)
                         if line_text.strip() and line_bbox:
                             # Determine rotation angle from direction
-                            import math
                             angle = round(math.degrees(math.atan2(line_dir[1], line_dir[0])))
                             rotated_spans.append({
                                 "text": line_text.strip(),
@@ -338,10 +338,6 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
             if not translated:
                 continue
 
-            translated = translated.replace('\u2192', '->').replace('\u2013', '-').replace('\u2014', '--')
-            translated = translated.replace('\u2018', "'").replace('\u2019', "'")
-            translated = translated.replace('\u201c', '"').replace('\u201d', '"').replace('\u2026', '...')
-
             color_int = elem["color"]
             color = (
                 ((color_int >> 16) & 0xFF) / 255.0,
@@ -372,10 +368,6 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
 
             if not translated:
                 continue
-
-            translated = translated.replace('\u2192', '->').replace('\u2013', '-').replace('\u2014', '--')
-            translated = translated.replace('\u2018', "'").replace('\u2019', "'")
-            translated = translated.replace('\u201c', '"').replace('\u201d', '"').replace('\u2026', '...')
 
             color_int = elem["color"]
             color = (

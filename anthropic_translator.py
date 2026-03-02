@@ -21,6 +21,15 @@ def repair_json(text):
         fixed_lines.append(line)
     return '\n'.join(fixed_lines)
 
+# Client cache: reuse connections per API key (avoids TCP handshake overhead per call)
+_client_cache = {}
+
+def _get_client(api_key: str) -> Anthropic:
+    """Get or create a cached Anthropic client for the given API key."""
+    if api_key not in _client_cache:
+        _client_cache[api_key] = Anthropic(api_key=api_key, timeout=120.0)
+    return _client_cache[api_key]
+
 # Configuration constants
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 HAIKU_MAX_OUTPUT_TOKENS = 8000
@@ -48,10 +57,10 @@ def translate_with_haiku(texts: dict, api_key: str, source_lang: str = "French",
     Returns:
         Dict with translations and token usage
     """
-    client = Anthropic(api_key=api_key, timeout=120.0)  # 2 minute timeout to prevent hanging
+    client = _get_client(api_key)
 
-    # Combined prompt (no caching for maximum speed)
-    prompt = f"""You are translating architectural/construction documents from {source_lang} to {target_lang}.
+    # System rules (static per language pair, reused across batches)
+    system_rules = f"""You are translating architectural/construction documents from {source_lang} to {target_lang}.
 
 **IMPORTANT RULES:**
 - Complete translations only - NO {source_lang} words in output
@@ -65,22 +74,22 @@ def translate_with_haiku(texts: dict, api_key: str, source_lang: str = "French",
 - Use ONLY basic ASCII characters: regular hyphens (-), regular quotes ("), regular apostrophes (')
 
 Return format: JSON object with same keys as input
-Return ONLY the JSON, no markdown code blocks.
+Return ONLY the JSON, no markdown code blocks."""
 
-Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON object with the same keys.
+    # Texts to translate (dynamic per batch)
+    user_content = f"""Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON object with the same keys.
 
 {source_lang} texts to translate:
 {json.dumps(texts, ensure_ascii=False, indent=2)}"""
 
-    # Call Claude Haiku 4.5 (no caching)
     try:
         message = client.messages.create(
             model=HAIKU_MODEL,
             max_tokens=HAIKU_MAX_OUTPUT_TOKENS,
-            system=prompt,
+            system=system_rules,
             messages=[{
                 "role": "user",
-                "content": "Translate the texts provided in the system prompt."
+                "content": user_content
             }]
         )
     except AuthenticationError:
@@ -141,7 +150,7 @@ Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON
     }
 
 
-PARALLEL_API_BATCHES = 3  # Reduced from 5 to lower peak memory usage
+PARALLEL_API_BATCHES = 5  # Match the 5 API keys for maximum parallelism
 
 
 def translate_batch(texts: dict, api_key: str = None, batch_size: int = HAIKU_DEFAULT_BATCH_SIZE, source_lang: str = "French", target_lang: str = "English", progress_callback=None, max_tokens_per_batch: int = HAIKU_MAX_TOKENS_PER_BATCH, api_keys: list = None) -> dict:
