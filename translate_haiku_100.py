@@ -260,6 +260,34 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
                     text_elements[idx_int]["translated"] = english
                     text_elements[idx_int]["type"] = "haiku"
 
+            # Retry pass: collect untranslated items and send them again
+            retry_items = {}
+            for idx_str in needs_translation:
+                if idx_str not in translations:
+                    retry_items[idx_str] = needs_translation[idx_str]
+
+            if retry_items:
+                safe_print(f"   Retrying {len(retry_items)} missed items...")
+                retry_result = translate_batch(
+                    retry_items,
+                    api_key,
+                    batch_size=100,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    api_keys=api_keys
+                )
+                retry_translations = retry_result["translations"]
+                input_tokens += retry_result["input_tokens"]
+                output_tokens += retry_result["output_tokens"]
+
+                for idx_str, english in retry_translations.items():
+                    idx_int = int(idx_str)
+                    if idx_int < len(text_elements):
+                        text_elements[idx_int]["translated"] = english
+                        text_elements[idx_int]["type"] = "haiku"
+
+                safe_print(f"   Retry recovered {len(retry_translations)}/{len(retry_items)} items")
+
         except Exception as e:
             import traceback
             safe_print(f"   Haiku translation failed: {e}")
@@ -275,17 +303,6 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
     safe_print(f"   Translated by Haiku: {haiku_count}")
     safe_print(f"   Skipped (numbers/units): {skipped}")
     safe_print(f"   UNTRANSLATED (gaps): {untranslated_count}")
-
-    # Show untranslated items if any
-    if untranslated_count > 0:
-        safe_print(f"\n⚠️ WARNING: {untranslated_count} items were NOT translated!")
-        safe_print("These are the GAPS we're investigating:")
-        for idx, elem in enumerate(text_elements):
-            if "translated" not in elem:
-                safe_print(f"   - '{elem['text']}'")
-                if idx >= 10:
-                    safe_print(f"   ... and {untranslated_count - 10} more")
-                    break
 
     # MEMORY OPTIMIZATION: Clear the translation dict as we've applied results to text_elements
     needs_translation.clear()
