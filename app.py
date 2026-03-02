@@ -512,11 +512,34 @@ with tab1:
             # Check if another user is translating
             is_locked, lock_user, lock_elapsed = get_lock_status()
             if is_locked and lock_user != str(user_id):
-                st.warning(f"Another translation is in progress ({int(lock_elapsed)}s elapsed). Please wait...")
-                st.info("The page will auto-refresh when ready. Or click below to check status.")
-                if st.button("Check Status"):
+                lock_mins = int(lock_elapsed) // 60
+                lock_secs = int(lock_elapsed) % 60
+                lock_str = f"{lock_mins}m {lock_secs}s" if lock_mins > 0 else f"{lock_secs}s"
+                st.warning(f"Another translation is in progress ({lock_str} elapsed). Please wait...")
+
+                col_check, col_queue = st.columns(2)
+                with col_check:
+                    if st.button("Refresh Status"):
+                        st.rerun()
+                with col_queue:
+                    if st.button("Queue My Translation"):
+                        st.session_state.queued_for_translation = True
+                        st.rerun()
+
+                # If queued, show waiting state with cancel option
+                if st.session_state.get("queued_for_translation"):
+                    st.info("You're in the queue. The page will auto-check every 10 seconds.")
+                    if st.button("Cancel Queue", type="secondary"):
+                        st.session_state.queued_for_translation = False
+                        st.rerun()
+                    import time as _time
+                    _time.sleep(10)
                     st.rerun()
             else:
+                # Clear queue flag if lock is free and we were queued
+                if st.session_state.get("queued_for_translation"):
+                    st.session_state.queued_for_translation = False
+
                 # Estimate translation time (architectural PDFs are text-dense)
                 total_files = len(uploaded_files)
                 if total_files == 1:
@@ -537,16 +560,10 @@ with tab1:
                         st.error("Cannot translate: Source and target languages are the same!")
                     elif not st.session_state.get("anthropic_api_key"):
                         st.error("API Key not found! Set ANTHROPIC_API_KEY environment variable on Render.")
+                    elif not acquire_translation_lock(user_id):
+                        st.warning("Another translation just started. Please wait...")
+                        st.rerun()
                     else:
-                        # Wait for lock if another session is translating
-                        import time as _time
-                        wait_placeholder = st.empty()
-                        while not acquire_translation_lock(user_id):
-                            is_locked, _, elapsed = get_lock_status()
-                            if is_locked:
-                                wait_placeholder.info(f"Another translation in progress ({int(elapsed)}s elapsed). Waiting in queue...")
-                            _time.sleep(5)
-                        wait_placeholder.empty()
                         # Set translation state to true
                         st.session_state.is_translating = True
                         import shutil
