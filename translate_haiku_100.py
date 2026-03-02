@@ -339,7 +339,7 @@ def process_pdf(input_path, output_path, api_key, source_lang="French", target_l
                     text=translated,
                     fontsize=size,
                     text_color=color,
-                    fill=False
+                    fill=(1, 1, 1)  # White fill to fully cover accent marks from original text
                 )
                 success_count += 1
             except Exception:
