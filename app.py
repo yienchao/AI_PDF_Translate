@@ -517,13 +517,13 @@ with tab1:
                 if st.button("Check Status"):
                     st.rerun()
             else:
-                # Estimate translation time
+                # Estimate translation time (architectural PDFs are text-dense)
                 total_files = len(uploaded_files)
                 if total_files == 1:
-                    est_seconds = int(20 + (total_size_mb * 80))
+                    est_seconds = int(30 + (total_size_mb * 150))
                 else:
                     parallel = min(total_files, MAX_PARALLEL_TRANSLATIONS)
-                    est_seconds = int(20 + (total_size_mb * 80) / parallel * total_files / parallel)
+                    est_seconds = int(30 + (total_size_mb * 150 * total_files) / parallel)
                 if est_seconds < 60:
                     est_str = f"~{est_seconds}s"
                 else:
@@ -715,7 +715,7 @@ with tab1:
                         else:
                             # MULTIPLE FILES: Process in parallel (or sequential if memory is high)
                             current_rss = get_rss_mb()
-                            MEMORY_THRESHOLD_MB = 512  # Fall back to sequential above this (2GB instance)
+                            MEMORY_THRESHOLD_MB = 1024  # Fall back to sequential above this (2GB instance)
                             if current_rss > MEMORY_THRESHOLD_MB:
                                 safe_print(f"[MEMORY] RSS={current_rss:.0f}MB > {MEMORY_THRESHOLD_MB}MB threshold, using sequential processing")
                                 effective_workers = 1
