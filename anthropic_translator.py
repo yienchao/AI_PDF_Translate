@@ -1,6 +1,25 @@
 """Anthropic API Translation Helper using Claude Haiku 4.5"""
 import json
+import re
 from anthropic import Anthropic, AuthenticationError, PermissionDeniedError, RateLimitError, APIStatusError, APIConnectionError, APITimeoutError
+
+
+def repair_json(text):
+    """Fix common JSON issues from LLM output (e.g., missing opening quotes on values).
+
+    Haiku occasionally returns lines like:  "3151": AT JOIST LOCATIONS"
+    instead of:                             "3151": "AT JOIST LOCATIONS"
+    """
+    lines = text.split('\n')
+    fixed_lines = []
+    for line in lines:
+        # Match: "key": value_without_opening_quote",  (value starts with letter, ends with quote)
+        match = re.match(r'^(\s*"[^"]+"\s*:\s*)([A-Za-z][^"]*")(,?\s*)$', line)
+        if match:
+            prefix, value, suffix = match.groups()
+            line = f'{prefix}"{value}{suffix}'
+        fixed_lines.append(line)
+    return '\n'.join(fixed_lines)
 
 # Configuration constants
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -87,33 +106,39 @@ Translate the following {source_lang} texts to {target_lang}. Return ONLY a JSON
     if response_text.startswith("json"):
         response_text = response_text[4:].strip()
 
-    # Parse JSON
+    # Parse JSON (with repair fallback for LLM quirks like missing quotes)
     try:
         translations = json.loads(response_text)
+    except json.JSONDecodeError:
+        # Try to repair common LLM JSON issues (e.g., missing opening quotes)
+        repaired = repair_json(response_text)
+        try:
+            translations = json.loads(repaired)
+            print(f"[JSON] Repaired malformed JSON from API response", flush=True)
+        except json.JSONDecodeError as e2:
+            raise ValueError(f"Failed to parse API response as JSON (even after repair): {e2}\n\nResponse:\n{response_text}")
 
-        # Sanitize all translated text: replace Unicode characters that cause PDF encoding issues
-        sanitized_translations = {}
-        for key, text in translations.items():
-            if isinstance(text, str):
-                # Replace problematic Unicode characters with ASCII equivalents
-                text = text.replace('\u2192', '->')  # → arrow
-                text = text.replace('\u2013', '-')  # en dash
-                text = text.replace('\u2014', '--')  # em dash
-                text = text.replace('\u2018', "'")  # left single quote
-                text = text.replace('\u2019', "'")  # right single quote
-                text = text.replace('\u201c', '"')  # left double quote
-                text = text.replace('\u201d', '"')  # right double quote
-                text = text.replace('\u2026', '...')  # ellipsis
-            sanitized_translations[key] = text
+    # Sanitize all translated text: replace Unicode characters that cause PDF encoding issues
+    sanitized_translations = {}
+    for key, text in translations.items():
+        if isinstance(text, str):
+            # Replace problematic Unicode characters with ASCII equivalents
+            text = text.replace('\u2192', '->')  # → arrow
+            text = text.replace('\u2013', '-')  # en dash
+            text = text.replace('\u2014', '--')  # em dash
+            text = text.replace('\u2018', "'")  # left single quote
+            text = text.replace('\u2019', "'")  # right single quote
+            text = text.replace('\u201c', '"')  # left double quote
+            text = text.replace('\u201d', '"')  # right double quote
+            text = text.replace('\u2026', '...')  # ellipsis
+        sanitized_translations[key] = text
 
-        # Return translations with token usage
-        return {
-            "translations": sanitized_translations,
-            "input_tokens": message.usage.input_tokens,
-            "output_tokens": message.usage.output_tokens
-        }
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse API response as JSON: {e}\n\nResponse:\n{response_text}")
+    # Return translations with token usage
+    return {
+        "translations": sanitized_translations,
+        "input_tokens": message.usage.input_tokens,
+        "output_tokens": message.usage.output_tokens
+    }
 
 
 PARALLEL_API_BATCHES = 3  # Reduced from 5 to lower peak memory usage
