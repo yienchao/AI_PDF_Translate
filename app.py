@@ -16,11 +16,25 @@ load_dotenv()
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from translate_haiku_100 import process_pdf
+# Lazy imports: heavy modules (fitz, anthropic, supabase) loaded only when needed
+# This cuts ~150-200 MB from baseline RSS at startup
 from auth import require_auth, display_user_info, get_user_id
-from supabase_client import get_supabase_client
-from anthropic_translator import translate_with_haiku
-from api_key_manager import get_key_manager
+
+def _get_process_pdf():
+    from translate_haiku_100 import process_pdf
+    return process_pdf
+
+def _get_translate_with_haiku():
+    from anthropic_translator import translate_with_haiku
+    return translate_with_haiku
+
+def _get_supabase_client():
+    from supabase_client import get_supabase_client
+    return get_supabase_client()
+
+def _get_key_manager():
+    from api_key_manager import get_key_manager
+    return get_key_manager()
 
 # Configuration constants
 HAIKU_PRICE_INPUT_PER_1M = 1.00
@@ -187,6 +201,7 @@ def process_single_file(idx, uploaded_file, key_manager, source_lang, target_lan
         log_memory(f"Before process_pdf file_{idx}")
 
         # Translate PDF content (pass all keys for parallel batch rotation)
+        process_pdf = _get_process_pdf()
         success, input_tokens, output_tokens = process_pdf(
             str(input_path),
             str(output_path),
@@ -273,6 +288,7 @@ def translate_filenames_batch(filenames, api_key, source_lang, target_lang):
         Dict of {index: translated_filename} or empty dict on error
     """
     try:
+        translate_with_haiku = _get_translate_with_haiku()
         result = translate_with_haiku(filenames, api_key, source_lang, target_lang)
         # Sanitize translated filenames for Windows filesystem
         sanitized = {k: sanitize_filename(v) for k, v in result["translations"].items()}
@@ -324,7 +340,7 @@ require_auth()
 # Initialize Supabase client for translation logging (independent of user auth)
 if "supabase" not in st.session_state:
     try:
-        st.session_state.supabase = get_supabase_client()
+        st.session_state.supabase = _get_supabase_client()
     except Exception:
         st.session_state.supabase = None  # Supabase not configured, logging disabled
 
@@ -538,7 +554,7 @@ with tab1:
 
                         # Initialize API key manager
                         try:
-                            key_manager = get_key_manager()
+                            key_manager = _get_key_manager()
                             total_keys = key_manager.get_total_keys()
                             st.info(f"Using API key rotation with {total_keys} key(s)")
                         except ValueError as e:
@@ -650,6 +666,7 @@ with tab1:
                             all_keys = list(key_manager.key_usage.keys())
 
                             try:
+                                process_pdf = _get_process_pdf()
                                 success, input_tokens, output_tokens = process_pdf(
                                     str(input_path),
                                     str(output_path),
@@ -698,7 +715,7 @@ with tab1:
                         else:
                             # MULTIPLE FILES: Process in parallel (or sequential if memory is high)
                             current_rss = get_rss_mb()
-                            MEMORY_THRESHOLD_MB = 800  # Fall back to sequential above this
+                            MEMORY_THRESHOLD_MB = 512  # Fall back to sequential above this (2GB instance)
                             if current_rss > MEMORY_THRESHOLD_MB:
                                 safe_print(f"[MEMORY] RSS={current_rss:.0f}MB > {MEMORY_THRESHOLD_MB}MB threshold, using sequential processing")
                                 effective_workers = 1
